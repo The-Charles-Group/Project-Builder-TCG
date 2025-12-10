@@ -2576,6 +2576,14 @@
         });
       }
       
+      // GPT 5.1 Pro: Also update SCENARIO_A and set dirty flag via app.js handler
+      if (typeof window.onPricingDetailHoursChange === 'function') {
+        window.onPricingDetailHoursChange(deliverableCode, componentName, hours);
+      } else {
+        // Set dirty flag directly if handler not available
+        window.pricingDetailsDirty = true;
+      }
+      
       // Recalculate cost display for this component
       recalculateComponentPricingCost(deliverableCode, componentName);
     }
@@ -2605,6 +2613,14 @@
           hours: hours,
           rate: numRate
         });
+      }
+      
+      // GPT 5.1 Pro: Also update SCENARIO_A and set dirty flag via app.js handler
+      if (typeof window.onPricingDetailRateChange === 'function') {
+        window.onPricingDetailRateChange(deliverableCode, componentName, rate);
+      } else {
+        // Set dirty flag directly if handler not available
+        window.pricingDetailsDirty = true;
       }
       
       // Recalculate cost display for this component
