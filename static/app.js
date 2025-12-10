@@ -3826,8 +3826,11 @@ async function onUpdatePricingDetailsClick() {
     }
     console.log('[PRICING] Cleared deltas for next edit cycle');
     
-    // STEP 2: Collect metadata from UI (updates SCENARIO_A in place)
-    collectScenarioFromUi(window.SCENARIO_A);
+    // STEP 2: CRITICAL - Collect ALL data from UI (hours/rates/metadata) - USE RETURNED VALUE
+    const collectedScenario = collectScenarioFromUi(window.SCENARIO_A);
+    if (collectedScenario) {
+      window.SCENARIO_A = collectedScenario;
+    }
     
     // STEP 3: Sync updated scenario to backend and get authoritative totals
     const backendData = await rebuildPricingFromBackend(window.SCENARIO_A);
@@ -4632,10 +4635,13 @@ async function exportPricingDetails() {
   }
   
   try {
-    // GPT 5.1 Pro: Flush pending patches and sync before export - pass the scenario
+    // GPT 5.1 Pro: COMPLETE FIX - Flush pending patches, collect from UI, and sync before export
     if (window.ensureScenarioSyncedBeforeExport) {
       await window.ensureScenarioSyncedBeforeExport(scenario, 'A');
     }
+    
+    // CRITICAL: Use the UPDATED scenario after sync (window.SCENARIO_A is now current)
+    const scenarioToUse = window.SCENARIO_A || scenario;
     
     const projectName = document.getElementById('projectName')?.value || 'Project';
     const formatSelect = document.getElementById('export-format');
@@ -4654,7 +4660,7 @@ async function exportPricingDetails() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         session_id: sessionId,  // NEW: Prefer SCENARIO_STORE working scenario
-        scenario: scenario,
+        scenario: scenarioToUse,  // CRITICAL: Use collected/synced scenario
         file_format: fileFormat
       })
     });
@@ -4732,10 +4738,13 @@ async function exportScenario(fileFormat, buttonId) {
   }
   
   try {
-    // GPT 5.1 Pro: Flush pending patches and sync before export - pass the scenario
+    // GPT 5.1 Pro: COMPLETE FIX - Flush pending patches, collect from UI, and sync before export
     if (window.ensureScenarioSyncedBeforeExport) {
       await window.ensureScenarioSyncedBeforeExport(scenario, 'A');
     }
+    
+    // CRITICAL: Use the UPDATED scenario after sync (window.SCENARIO_A is now current)
+    const scenarioToUse = window.SCENARIO_A || scenario;
     
     const projectName = document.getElementById('projectName')?.value || 'Project';
     
@@ -4752,7 +4761,7 @@ async function exportScenario(fileFormat, buttonId) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         session_id: sessionId,  // NEW: Prefer SCENARIO_STORE working scenario
-        scenario: scenario,
+        scenario: scenarioToUse,  // CRITICAL: Use collected/synced scenario
         file_format: fileFormat
       })
     });
@@ -11248,11 +11257,16 @@ async function onExport(which){
   const scenarios = getScenarioState();
   if(!scenarios){ alert("Build scenarios first."); return; }
   
-  const scenarioToExport = scenarios[which];
+  let scenarioToExport = scenarios[which];
   
-  // GPT 5.1 Pro: Flush pending patches and sync before export - pass the correct scenario
+  // GPT 5.1 Pro: COMPLETE FIX - Flush pending patches, collect from UI, and sync before export
   if (window.ensureScenarioSyncedBeforeExport) {
     await window.ensureScenarioSyncedBeforeExport(scenarioToExport, which);
+  }
+  
+  // CRITICAL: Use the UPDATED scenario after sync (window.SCENARIO_A is now current)
+  if (which === 'A' && window.SCENARIO_A) {
+    scenarioToExport = window.SCENARIO_A;
   }
   
   // Get session_id from ScenarioManager (preferred) or SessionManager
@@ -11929,11 +11943,16 @@ S2.els.btnApply?.addEventListener('click', s2ApplyAndBuild);
 // ========== XML Export Functions ==========
 async function exportXMLScenario(letter) {
   // Get the scenario to export
-  const scen = window.getScenario?.(letter);
+  let scen = window.getScenario?.(letter);
   
-  // GPT 5.1 Pro: Flush pending patches and sync before export - pass the correct scenario
+  // GPT 5.1 Pro: COMPLETE FIX - Flush pending patches, collect from UI, and sync before export
   if (window.ensureScenarioSyncedBeforeExport) {
     await window.ensureScenarioSyncedBeforeExport(scen, letter);
+  }
+  
+  // CRITICAL: Use the UPDATED scenario after sync (window.SCENARIO_A is now current)
+  if (letter === 'A' && window.SCENARIO_A) {
+    scen = window.SCENARIO_A;
   }
   
   // WORKFRONT COMPATIBILITY: Anchors disabled (alphanumeric WBS breaks Workfront import)

@@ -3013,7 +3013,7 @@
     window.ensureScenarioSyncedBeforeExport = ensureScenarioSyncedBeforeExport;
 
     async function onExportScenario(letter) {
-      const scen = window.getScenario(letter);
+      let scen = window.getScenario(letter);
       if (!scen) { alert('Build scenarios first.'); return; }
 
       // Get session_id from ScenarioManager (preferred) or SessionManager or localStorage
@@ -3022,8 +3022,13 @@
                         localStorage.getItem('apb.currentSession');
       console.log('[Export] Using session_id:', sessionId);
       
-      // GPT 5.1 Pro: Use unified pre-export sync function - pass the correct scenario
+      // GPT 5.1 Pro: COMPLETE FIX - sync and collect from UI before export
       await ensureScenarioSyncedBeforeExport(scen, letter);
+      
+      // CRITICAL: Use the UPDATED scenario after sync (window.SCENARIO_A is now current)
+      if (letter === 'A' && window.SCENARIO_A) {
+        scen = window.SCENARIO_A;
+      }
 
       const payload = {
         session_id: sessionId,  // NEW: Prefer SCENARIO_STORE working scenario (preserves Step 3 edits)
@@ -3038,14 +3043,19 @@
 
     // XML Export Functions (Task 4.5: Use new individual scenario endpoints)
     async function onExportXMLScenario(letter) {
-      const scen = window.getScenario(letter);
+      let scen = window.getScenario(letter);
       if (!scen) { alert(`Build Scenario ${letter} first.`); return; }
 
       // Get session_id to access Gantt-edited timeline data from SCENARIO_STORE
       const sessionId = window.SessionManager ? window.SessionManager.getCurrentSessionId() : null;
       
-      // GPT 5.1 Pro: Use unified pre-export sync function - pass the correct scenario
+      // GPT 5.1 Pro: COMPLETE FIX - sync and collect from UI before export
       await ensureScenarioSyncedBeforeExport(scen, letter);
+      
+      // CRITICAL: Use the UPDATED scenario after sync (window.SCENARIO_A is now current)
+      if (letter === 'A' && window.SCENARIO_A) {
+        scen = window.SCENARIO_A;
+      }
       
       // Always include Start/End anchors (checkbox removed - now always enabled)
       const addAnchors = true;
@@ -4397,7 +4407,7 @@
   <script src="https://cdn.jsdelivr.net/npm/frappe-gantt@0.6.1/dist/frappe-gantt.min.js"></script>
   <script src="/static/static_weights.js"></script>
   <script src="/static/js/scenario-store.js"></script>
-  <script src="/static/app.js?v=resource-risk-v2" defer></script>
+  <script src="/static/app.js?v=step3-sync-fix-v3" defer></script>
   <script>
     // Weighted AI Suggestions Handler
     document.addEventListener('DOMContentLoaded', () => {
