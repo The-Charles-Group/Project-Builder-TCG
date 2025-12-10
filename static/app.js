@@ -3876,22 +3876,23 @@ async function initPricingStep() {
       })
     });
     
-    // Handle non-200 responses gracefully (422 = no scenario exists yet, which is expected)
+    // Handle API responses gracefully
     if (!resp.ok) {
-      if (resp.status === 422) {
-        console.log('[PRICING] No working scenario exists yet (422) - will be created by Step 2 builder');
-      } else {
-        console.warn('[PRICING] API returned status', resp.status, '- waiting for Step 2 builder');
-      }
+      console.warn('[PRICING] API returned status', resp.status, '- waiting for Step 2 builder');
       // This is expected for new sessions - buildScenariosAB will be called from Step 2
       return;
     }
     
     const data = await resp.json();
     
-    // Check if we have a valid scenario
+    // GPT 5.1 Pro: Handle graceful "no scenario" response (not a 422 error)
+    // Backend now returns {ok: false, needs_step2: true} instead of throwing 422
     if (!data.ok || !data.scenarios || !data.scenarios.A) {
-      console.warn('[PRICING] No working scenario found, need to seed from Step 2 builder');
+      if (data.needs_step2) {
+        console.log('[PRICING] No working scenario exists yet - Step 2 needs to run first');
+      } else {
+        console.warn('[PRICING] No working scenario found, need to seed from Step 2 builder');
+      }
       // This is expected for new sessions - buildScenariosAB will be called from Step 2
       return;
     }

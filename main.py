@@ -8883,6 +8883,40 @@ async def api_rebuild_breakdown(payload: RebuildBreakdownPayload):
             status_code=500
         )
 
+@app.get("/api/debug/deliverable_hours/{session_id}/{deliverable_code}")
+def debug_deliverable_hours(session_id: str, deliverable_code: str):
+    """
+    Debug endpoint to verify deliverable hours match between UI and export.
+    GPT 5.1 Pro: Helps diagnose hours mismatches (e.g., Brand Identity Development 307 vs 300).
+    """
+    scenario = get_working_scenario(session_id)
+    if not scenario or not scenario.get("items"):
+        raise HTTPException(404, f"Scenario not found for session {session_id}")
+
+    items = scenario.get("items", [])
+    rows = [i for i in items if i.get("Deliverable_Code") == deliverable_code or 
+                                 i.get("deliverable_code") == deliverable_code]
+    
+    total_hours = sum(
+        i.get("Planned_Hours") or i.get("total_hours") or i.get("hours", 0) 
+        for i in rows
+    )
+
+    return {
+        "deliverable_code": deliverable_code,
+        "rows": len(rows),
+        "scenario_hours_sum": total_hours,
+        "rows_detail": [
+            {
+                "WBS_ID": r.get("WBS_ID") or r.get("wbs_id"),
+                "Component": r.get("Component") or r.get("component"),
+                "Planned_Hours": r.get("Planned_Hours") or r.get("total_hours") or r.get("hours", 0),
+                "Rate": r.get("Rate_USD") or r.get("blended_rate") or r.get("effective_rate", 0)
+            } for r in rows
+        ]
+    }
+
+
 class ResetFromStep2Payload(BaseModel):
     """Payload for resetting scenario from Step 2 baseline."""
     session_id: str
@@ -9586,6 +9620,19 @@ def api_post_scenarios(payload: dict, request: Request):
         
         if reset_flag:
             print(f"[/api/scenarios] Reset requested but no baseline - falling back to Step 2")
+        
+        # GPT 5.1 Pro FIX: If reset=false and no working scenario exists, return gracefully
+        # This allows initPricingStep() to know Step 2 needs to run first
+        if not reset_flag and session_id:
+            # No working scenario found for this session - return ok:false so frontend knows
+            # Step 2 hasn't run yet, rather than throwing 422 for missing codes
+            print(f"[/api/scenarios] No working scenario found for session {session_id} - Step 2 needs to run first")
+            return {
+                "ok": False,
+                "scenarios": None,
+                "message": "No scenario exists for this session. Complete Step 2 to build a scenario.",
+                "needs_step2": True
+            }
         
         # Extract codes from the payload - check all possible field names
         codes = None
