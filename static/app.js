@@ -3703,54 +3703,59 @@ async function onUpdatePricingDetailsClick() {
   }
   
   try {
-    // GPT 5.1 Pro: Aggregate ALL component hours from DOM into SCENARIO_A items
-    // This ensures we capture both edited and unedited component hours
+    // GPT 5.1 Pro: Aggregate COMPONENT-LEVEL hours from DOM into SCENARIO_A items
+    // IMPORTANT: Only read component inputs (with __ separator), NOT deliverable-level inputs
+    // Deliverable inputs already contain the sum, so reading both = double counting
     if (window.SCENARIO_A && window.SCENARIO_A.items) {
-      console.log('[PRICING] Aggregating ALL component hours from DOM...');
+      console.log('[PRICING] Aggregating COMPONENT-LEVEL hours from DOM...');
       
       // Collect all hours inputs from the pricing details table
-      // IDs are sanitized: "hours-DEL_0008__Component_Name" (underscores instead of special chars)
-      const hoursInputs = document.querySelectorAll('input[id^="hours-DEL"]');
-      const rateInputs = document.querySelectorAll('input[id^="rate-DEL"]');
+      // Component IDs have format: "hours-DEL_0008__Component_Name" (with __ separator)
+      // Deliverable IDs have format: "hours-DEL_0008" (no __ separator)
+      // We ONLY want component inputs to avoid double-counting
+      const allHoursInputs = document.querySelectorAll('input[id^="hours-DEL"]');
+      const allRateInputs = document.querySelectorAll('input[id^="rate-DEL"]');
+      
+      // Filter to only component-level inputs (those with __ in the ID)
+      const componentHoursInputs = Array.from(allHoursInputs).filter(input => input.id.includes('__'));
+      const componentRateInputs = Array.from(allRateInputs).filter(input => input.id.includes('__'));
+      
+      console.log(`[PRICING] Found ${componentHoursInputs.length} component inputs (filtered from ${allHoursInputs.length} total)`);
       
       // Group component hours and rates by deliverable code
       const deliverableHours = new Map();
       const deliverableRates = new Map();
       
-      hoursInputs.forEach(input => {
+      componentHoursInputs.forEach(input => {
         // ID format: "hours-DEL_XXXX__ComponentName" (sanitized)
-        // Need to extract deliverable code
         const idPart = input.id.replace('hours-', '');
-        // Match DEL-XXXX or DEL_XXXX pattern at the start
-        const match = idPart.match(/^(DEL[-_]\d+)/i);
-        if (match) {
-          // Normalize to DEL-XXXX format
-          const delivCode = match[1].replace('_', '-').toUpperCase();
-          if (!deliverableHours.has(delivCode)) {
-            deliverableHours.set(delivCode, 0);
-          }
-          deliverableHours.set(delivCode, deliverableHours.get(delivCode) + (parseFloat(input.value) || 0));
+        // Extract deliverable code (before the __ separator)
+        const delivCodePart = idPart.split('__')[0];
+        // Normalize to DEL-XXXX format
+        const delivCode = delivCodePart.replace('_', '-').toUpperCase();
+        
+        if (!deliverableHours.has(delivCode)) {
+          deliverableHours.set(delivCode, 0);
         }
+        deliverableHours.set(delivCode, deliverableHours.get(delivCode) + (parseFloat(input.value) || 0));
       });
       
-      // Get rates from inputs (use last rate for each deliverable as representative)
-      rateInputs.forEach(input => {
+      // Get rates from component inputs
+      componentRateInputs.forEach(input => {
         const idPart = input.id.replace('rate-', '');
-        const match = idPart.match(/^(DEL[-_]\d+)/i);
-        if (match) {
-          const delivCode = match[1].replace('_', '-').toUpperCase();
-          const rate = parseFloat(input.value) || 210;
-          // Keep track of rates - we'll average or use first non-default
-          if (!deliverableRates.has(delivCode) || rate !== 210) {
-            deliverableRates.set(delivCode, rate);
-          }
+        const delivCodePart = idPart.split('__')[0];
+        const delivCode = delivCodePart.replace('_', '-').toUpperCase();
+        const rate = parseFloat(input.value) || 210;
+        // Keep track of rates - use first non-default rate
+        if (!deliverableRates.has(delivCode) || rate !== 210) {
+          deliverableRates.set(delivCode, rate);
         }
       });
       
-      console.log('[PRICING] DOM aggregated hours:', Object.fromEntries(deliverableHours));
-      console.log('[PRICING] DOM aggregated rates:', Object.fromEntries(deliverableRates));
+      console.log('[PRICING] Component-level aggregated hours:', Object.fromEntries(deliverableHours));
+      console.log('[PRICING] Component-level aggregated rates:', Object.fromEntries(deliverableRates));
       
-      // Update SCENARIO_A items with aggregated totals
+      // Update SCENARIO_A items with aggregated component totals
       for (const item of window.SCENARIO_A.items) {
         const delivCode = (item.deliverable_code || item.Deliverable_Code || '').toUpperCase();
         if (deliverableHours.has(delivCode)) {
