@@ -2319,7 +2319,26 @@ const pricingDataEnhanced = {
 };
 
 // UNIFIED PRICING TABLE - Fully editable inline version
+// NOTE: This function should NOT overwrite the component-level table from index.html
+// when it is already populated with component rows
 function updatePricingTable() {
+  // Check if the original component table (from index.html) is already populated
+  // If it has component rows, don't replace it with the unified table
+  const pricingTbody = document.getElementById('pricing-tbody');
+  if (pricingTbody && pricingTbody.children.length > 0) {
+    // Check if these are component-level rows (have component class or nested structure)
+    const hasComponentRows = pricingTbody.querySelector('tr[data-component], tr.component-row, input[id^="hours-DEL"]');
+    if (hasComponentRows) {
+      // Component table already populated - don't overwrite
+      // Just update the summary elements if needed
+      const scenarios = getScenarioState();
+      if (scenarios && scenarios.A) {
+        updatePricingSummary();
+      }
+      return;
+    }
+  }
+  
   const container = document.getElementById('pricing-container') || document.getElementById('pricing-tbody')?.parentElement?.parentElement;
   const scenarios = getScenarioState();
   if (!container || !scenarios) return;
@@ -2389,8 +2408,9 @@ function updatePricingTable() {
     const isEditing = pricingDataEnhanced.editMode.get(item.deliverable_code) || false;
     
     // Get custom values or defaults
-    const customHours = pricingData.customHours.get(item.deliverable_code) || item.hours || 0;
-    const customRate = pricingData.customRates.get(item.deliverable_code) || item.blended_rate || 210;
+    // Support both 'hours' and 'total_hours' field names from backend
+    const customHours = pricingData.customHours.get(item.deliverable_code) || item.hours || item.total_hours || 0;
+    const customRate = pricingData.customRates.get(item.deliverable_code) || item.blended_rate || item.effective_rate || 210;
     const pricePerPeriod = customHours * customRate;
     const totalPrice = pricePerPeriod * periods;
     
