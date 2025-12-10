@@ -2965,13 +2965,13 @@
       return (s && Array.isArray(s.items) && s.items.length) ? s : null;
     };
 
-    // GPT 5.1 Pro: Ensure scenario is synced to backend before any export
-    // This flushes pending patches, collects UI state, syncs, and rebuilds totals
+    // GPT 5.1 Pro: COMPLETE FIX - Ensure scenario is synced to backend before any export
+    // This flushes pending patches, collects ALL UI state (hours/rates/metadata), syncs, and rebuilds totals
     // @param scenario - The scenario object to sync (optional, defaults to SCENARIO_A)
     // @param letter - The scenario letter 'A' or 'B' (optional, for logging)
     async function ensureScenarioSyncedBeforeExport(scenario, letter = 'A') {
       // Use provided scenario or fall back to SCENARIO_A
-      const scen = scenario || window.SCENARIO_A || window.getScenario?.('A');
+      let scen = scenario || window.SCENARIO_A || window.getScenario?.('A');
       if (!scen) {
         console.warn('[Export] No scenario to sync before export');
         return false;
@@ -2984,12 +2984,20 @@
           await window.ScenarioStore.flushPatchesNow();
         }
         
-        // 2) Collect metadata from UI if collectScenarioFromUi exists
+        // 2) CRITICAL: Collect ALL data from UI (hours/rates/metadata) - USE RETURNED VALUE
         if (typeof window.collectScenarioFromUi === 'function') {
-          window.collectScenarioFromUi(scen);
+          console.log(`[Export] Collecting ALL UI data (hours/rates/metadata) for Scenario ${letter}...`);
+          const collectedScenario = window.collectScenarioFromUi(scen);
+          if (collectedScenario) {
+            scen = collectedScenario;
+            // Update global SCENARIO_A if this is scenario A
+            if (letter === 'A') {
+              window.SCENARIO_A = collectedScenario;
+            }
+          }
         }
         
-        // 3) Sync scenario to backend
+        // 3) Sync the collected scenario to backend
         if (typeof window.syncScenarioToBackend === 'function') {
           console.log(`[Export] Syncing Scenario ${letter} to backend before export...`);
           await window.syncScenarioToBackend(scen);

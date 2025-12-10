@@ -3527,62 +3527,193 @@ function onPricingDetailRateChange(deliverableCode, componentName, newRateStr) {
   });
 }
 
-// Collect scenario-level metadata from UI (project_start, pricing_mode, rate_band, etc.)
-// IMPORTANT: This does NOT regenerate items - it only updates metadata
+// GPT 5.1 Pro: COMPLETE FIX - Collect ALL scenario data from UI
+// This reads BOTH metadata AND hours/rates from DOM inputs
+// Returns a deep copy of the scenario with all current DOM values applied
 function collectScenarioFromUi(scenario) {
-  if (!scenario) return;
+  if (!scenario) {
+    console.warn('[PRICING] collectScenarioFromUi - no scenario provided');
+    return null;
+  }
   
-  console.log('[PRICING] collectScenarioFromUi - updating metadata only (NOT regenerating items)');
+  console.log('[PRICING] collectScenarioFromUi - collecting metadata AND hours/rates from DOM');
   
-  // Read project start from UI
+  // Create a deep copy to avoid mutating the original
+  const collectedScenario = JSON.parse(JSON.stringify(scenario));
+  
+  // ========== PART 1: Collect metadata ==========
   const projectStartInput = document.getElementById('projectStart') || document.getElementById('project-start-input');
   if (projectStartInput?.value) {
-    scenario.project_start = projectStartInput.value;
+    collectedScenario.project_start = projectStartInput.value;
   }
   
-  // Read pricing mode from UI
   const pricingModeSelect = document.getElementById('pricingMode') || document.getElementById('pricing-mode-select');
   if (pricingModeSelect?.value) {
-    scenario.pricing_mode = pricingModeSelect.value;
+    collectedScenario.pricing_mode = pricingModeSelect.value;
   }
   
-  // Read rate band from UI
   const rateBandSelect = document.getElementById('rateBand') || document.getElementById('rate-band-select');
   if (rateBandSelect?.value) {
-    scenario.rate_band = rateBandSelect.value;
+    collectedScenario.rate_band = rateBandSelect.value;
   }
   
-  // Read blended rate from UI
   const blendedRateInput = document.getElementById('blendedRate');
   if (blendedRateInput?.value) {
-    scenario.blended_rate = parseFloat(blendedRateInput.value) || 210;
+    collectedScenario.blended_rate = parseFloat(blendedRateInput.value) || 210;
   }
   
-  // Read complexity from UI
   const complexitySelect = document.getElementById('complexity');
   if (complexitySelect?.value) {
-    scenario.complexity = complexitySelect.value;
+    collectedScenario.complexity = complexitySelect.value;
   }
   
-  // Read volume tier from UI
   const volumeTierSelect = document.getElementById('volumeTier');
   if (volumeTierSelect?.value) {
-    scenario.tier = volumeTierSelect.value;
+    collectedScenario.tier = volumeTierSelect.value;
   }
   
-  // IMPORTANT: Do NOT regenerate scenario.items here
-  // The items array already contains user edits that we want to preserve
-  
-  console.log('[PRICING] Metadata collected:', {
-    project_start: scenario.project_start,
-    pricing_mode: scenario.pricing_mode,
-    rate_band: scenario.rate_band
+  // ========== PART 2: Collect DELIVERABLE hours/rates from DOM inputs ==========
+  // The DOM has inputs with IDs like: hours-DEL001, rate-DEL001
+  document.querySelectorAll('tr[data-deliverable]').forEach(row => {
+    const delivCode = row.getAttribute('data-deliverable');
+    if (!delivCode) return;
+    
+    // Find the hours input for this deliverable
+    const hoursInput = document.getElementById(`hours-${delivCode}`);
+    const rateInput = document.getElementById(`rate-${delivCode}`);
+    
+    if (hoursInput || rateInput) {
+      // Find matching item in scenario.items
+      const item = collectedScenario.items?.find(i => 
+        String(i.deliverable_code || i.Deliverable_Code) === String(delivCode)
+      );
+      
+      if (item) {
+        if (hoursInput) {
+          const hours = parseFloat(hoursInput.value) || 0;
+          item.hours = hours;
+          item.total_hours = hours;
+          item.Planned_Hours = hours;
+          item.planned_hours = hours;
+        }
+        if (rateInput) {
+          const rate = parseFloat(rateInput.value) || 210;
+          item.blended_rate = rate;
+          item.effective_rate = rate;
+          item.Rate_USD = rate;
+          item.rate_usd = rate;
+        }
+        // Recalculate price
+        const h = item.hours || item.Planned_Hours || 0;
+        const r = item.blended_rate || item.Rate_USD || 210;
+        item.price = h * r;
+        item.Price_USD = h * r;
+        item.price_usd = h * r;
+        
+        console.log(`[PRICING] Collected deliverable ${delivCode}: ${h}h @ $${r} = $${h * r}`);
+      }
+    }
   });
+  
+  // ========== PART 3: Collect COMPONENT hours/rates from DOM inputs ==========
+  // Components have data-component="DEL001::ComponentName" and data-parent="DEL001"
+  document.querySelectorAll('tr[data-component]').forEach(row => {
+    const compKey = row.getAttribute('data-component');
+    const parentCode = row.getAttribute('data-parent');
+    if (!compKey || !parentCode) return;
+    
+    // Component key format is "DEL001::ComponentName"
+    const parts = compKey.split('::');
+    if (parts.length < 2) return;
+    const componentName = parts.slice(1).join('::'); // Handle component names with :: in them
+    
+    // Look for inputs within the component row
+    const hoursInput = row.querySelector('input[type="number"][onchange*="updateCustomHours"]');
+    const rateInput = row.querySelector('input[type="number"][onchange*="updateCustomRate"]');
+    
+    if (hoursInput || rateInput) {
+      // Find matching item in scenario.items
+      const item = collectedScenario.items?.find(i => 
+        String(i.deliverable_code || i.Deliverable_Code) === String(parentCode) &&
+        String(i.component || i.Component) === String(componentName)
+      );
+      
+      if (item) {
+        if (hoursInput) {
+          const hours = parseFloat(hoursInput.value) || 0;
+          item.hours = hours;
+          item.total_hours = hours;
+          item.Planned_Hours = hours;
+          item.planned_hours = hours;
+        }
+        if (rateInput) {
+          const rate = parseFloat(rateInput.value) || 210;
+          item.blended_rate = rate;
+          item.effective_rate = rate;
+          item.Rate_USD = rate;
+          item.rate_usd = rate;
+        }
+        // Recalculate price
+        const h = item.hours || item.Planned_Hours || 0;
+        const r = item.blended_rate || item.Rate_USD || 210;
+        item.price = h * r;
+        item.Price_USD = h * r;
+        item.price_usd = h * r;
+        
+        console.log(`[PRICING] Collected component ${compKey}: ${h}h @ $${r} = $${h * r}`);
+      }
+    }
+  });
+  
+  // ========== PART 4: Also apply any pricingData deltas that may not be in DOM ==========
+  if (window.pricingData && collectedScenario.items) {
+    collectedScenario.items.forEach(item => {
+      const code = item.deliverable_code || item.Deliverable_Code;
+      
+      // Check for custom hours in pricingData (fallback if DOM didn't have the input)
+      if (pricingData.customHours && pricingData.customHours.has(code)) {
+        const customHours = pricingData.customHours.get(code);
+        if (customHours !== undefined && customHours !== null) {
+          item.hours = customHours;
+          item.total_hours = customHours;
+          item.Planned_Hours = customHours;
+          item.planned_hours = customHours;
+        }
+      }
+      
+      // Check for custom rates in pricingData
+      if (pricingData.customRates && pricingData.customRates.has(code)) {
+        const customRate = pricingData.customRates.get(code);
+        if (customRate !== undefined && customRate !== null) {
+          item.blended_rate = customRate;
+          item.effective_rate = customRate;
+          item.Rate_USD = customRate;
+          item.rate_usd = customRate;
+        }
+      }
+      
+      // Recalculate price after applying pricingData
+      const h = item.hours || item.Planned_Hours || 0;
+      const r = item.blended_rate || item.Rate_USD || 210;
+      item.price = h * r;
+      item.Price_USD = h * r;
+      item.price_usd = h * r;
+    });
+  }
+  
+  console.log('[PRICING] collectScenarioFromUi complete:', {
+    project_start: collectedScenario.project_start,
+    pricing_mode: collectedScenario.pricing_mode,
+    items_count: collectedScenario.items?.length || 0
+  });
+  
+  return collectedScenario;
 }
 
-// Step 3 Build Scenario button handler (preserves edits, does NOT rebuild from database)
+// GPT 5.1 Pro: COMPLETE FIX - Step 3 Build Scenario button handler
+// Uses collectScenarioFromUi to capture ALL DOM edits before syncing
 async function onStep3BuildScenarioClick() {
-  console.log('[PRICING] onStep3BuildScenarioClick - preserving edits, syncing to backend');
+  console.log('[PRICING] onStep3BuildScenarioClick - collecting UI edits and syncing to backend');
   
   if (!window.SCENARIO_A) {
     console.warn('[PRICING] No SCENARIO_A found, cannot build');
@@ -3603,66 +3734,16 @@ async function onStep3BuildScenarioClick() {
       await window.ScenarioStore.flushPatchesNow();
     }
     
-    // 1) Collect metadata from UI (does NOT regenerate items)
-    collectScenarioFromUi(window.SCENARIO_A);
-    
-    // 2) Apply any pricingData edits to SCENARIO_A.items (from the pricingData maps)
-    if (window.SCENARIO_A.items && pricingData) {
-      window.SCENARIO_A.items.forEach(item => {
-        const code = item.deliverable_code || item.Deliverable_Code;
-        
-        // Apply custom hours if set
-        const customHours = pricingData.customHours.get(code);
-        if (customHours !== undefined) {
-          item.hours = customHours;
-          item.total_hours = customHours;
-          item.Planned_Hours = customHours;
-        }
-        
-        // Apply custom rate if set
-        const customRate = pricingData.customRates.get(code);
-        if (customRate !== undefined) {
-          item.blended_rate = customRate;
-          item.effective_rate = customRate;
-          item.Rate_USD = customRate;
-        }
-        
-        // Apply deliverable type if set
-        const delivType = pricingData.deliverableTypes.get(code);
-        if (delivType) {
-          item.is_retainer = (delivType === 'RETAINER');
-        }
-        
-        // Recalculate price
-        const hours = item.hours || item.total_hours || 0;
-        const rate = item.blended_rate || item.effective_rate || 210;
-        item.price = Math.round(hours * rate * 100) / 100;
-        item.Price_USD = item.price;
-        
-        // Apply component edits
-        if (item.components) {
-          item.components.forEach(comp => {
-            const compKey = `${code}::${comp.name || comp.Component}`;
-            const compHours = pricingData.customHours.get(compKey);
-            const compRate = pricingData.customRates.get(compKey);
-            
-            if (compHours !== undefined) {
-              comp.hours = compHours;
-              comp.Planned_Hours = compHours;
-            }
-            if (compRate !== undefined) {
-              comp.rate = compRate;
-              comp.Rate_USD = compRate;
-            }
-            
-            const ch = comp.hours || comp.Planned_Hours || 0;
-            const cr = comp.rate || comp.Rate_USD || item.blended_rate || 210;
-            comp.price = Math.round(ch * cr * 100) / 100;
-            comp.Price_USD = comp.price;
-          });
-        }
-      });
+    // 1) CRITICAL: Collect ALL data from UI (hours/rates/metadata) - USE THE RETURNED VALUE
+    const collectedScenario = collectScenarioFromUi(window.SCENARIO_A);
+    if (!collectedScenario) {
+      console.error('[PRICING] collectScenarioFromUi returned null');
+      alert('Failed to collect pricing data from UI. Please try again.');
+      return;
     }
+    
+    // 2) Update the global SCENARIO_A with the collected data
+    window.SCENARIO_A = collectedScenario;
     
     // 3) Sync scenario to backend and get authoritative totals
     const backendData = await rebuildPricingFromBackend(window.SCENARIO_A);
