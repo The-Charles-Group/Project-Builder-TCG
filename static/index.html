@@ -2403,14 +2403,14 @@
         }
       });
       
-      // Update One-Time summary
+      // Update One-Time summary (preserve fractional hours for cascade consistency)
       document.getElementById('one-time-count').textContent = oneTimeCount;
-      document.getElementById('one-time-hours').textContent = Math.round(oneTimeHours);
+      document.getElementById('one-time-hours').textContent = oneTimeHours.toFixed(1);
       document.getElementById('one-time-cost').textContent = `$${oneTimeCost.toLocaleString()}`;
       
-      // Update Retainer summary
+      // Update Retainer summary (preserve fractional hours for cascade consistency)
       document.getElementById('retainer-count').textContent = retainerCount;
-      document.getElementById('retainer-monthly-hours').textContent = Math.round(retainerMonthlyHours);
+      document.getElementById('retainer-monthly-hours').textContent = retainerMonthlyHours.toFixed(1);
       document.getElementById('retainer-monthly-cost').textContent = `$${retainerMonthlyCost.toLocaleString()}`;
       const annualRetainerCost = retainerMonthlyCost * 12;
       document.getElementById('retainer-annual-cost').textContent = `$${annualRetainerCost.toLocaleString()}`;
@@ -2611,8 +2611,173 @@
       
       // Recalculate cost display for this component
       recalculateComponentPricingCost(deliverableCode, componentName);
+      
+      // CASCADE UPDATE: Recalculate parent deliverable total and update UI + SCENARIO_A
+      updateDeliverableTotalFromComponents(deliverableCode);
     }
     window.updateComponentPricingHours = updateComponentPricingHours;
+    
+    // Helper: Recalculate deliverable total from all component inputs and update everywhere
+    function updateDeliverableTotalFromComponents(deliverableCode) {
+      // Component inputs use sanitized IDs (underscores), deliverable inputs use raw code
+      const safeDelivCode = deliverableCode.replace(/[^a-zA-Z0-9]/g, '_');
+      const componentInputs = document.querySelectorAll(`input[id^="hours-${safeDelivCode}__"]`);
+      
+      // Sum all component hours (preserve fractional hours)
+      let totalHours = 0;
+      componentInputs.forEach(input => {
+        totalHours += parseFloat(input.value) || 0;
+      });
+      
+      console.log('[PRICING CASCADE] Deliverable', deliverableCode, 'new total from components:', totalHours);
+      
+      // Get rate for price calculation - check all possible sources
+      // IMPORTANT: Must capture rate BEFORE updating item.total_hours, otherwise derivation uses stale data
+      // 1. Try SCENARIO_A item's existing rate (authoritative)
+      // 2. Calculate rate from existing price/ORIGINAL hours if rate fields missing
+      // 3. Use cached lastKnownRate on item if available
+      // 4. Try pricingData with raw key, then sanitized key
+      // 5. Try DOM with raw key, then sanitized key
+      // 6. Fall back to 210 only if no valid rate found
+      let rate;
+      let scenarioItem;
+      if (window.SCENARIO_A && window.SCENARIO_A.items) {
+        scenarioItem = window.SCENARIO_A.items.find(i => 
+          (i.deliverable_code || i.Deliverable_Code || '').toUpperCase() === deliverableCode.toUpperCase()
+        );
+        if (scenarioItem) {
+          // Check all possible rate fields in priority order
+          const possibleRates = [
+            scenarioItem.effective_rate,
+            scenarioItem.blended_rate,
+            scenarioItem.rate_usd,
+            scenarioItem.Rate_USD,
+            scenarioItem.rate,
+            scenarioItem._lastKnownRate  // Cache for subsequent edits
+          ];
+          for (const r of possibleRates) {
+            if (r !== undefined && r !== null && r > 0) {
+              rate = r;
+              break;
+            }
+          }
+          // If no explicit rate, derive from ORIGINAL price and hours (before our edit mutates them)
+          // ONLY do this if we haven't updated the item yet (first edit in chain)
+          if ((rate === undefined || rate === 0) && scenarioItem.price > 0 && scenarioItem.total_hours > 0) {
+            // Only derive if this appears to be original data (price matches hours * some reasonable rate)
+            const impliedRate = scenarioItem.price / scenarioItem.total_hours;
+            if (impliedRate >= 50 && impliedRate <= 1000) {  // Sanity check - rates typically $50-$1000/hr
+              rate = impliedRate;
+              scenarioItem._lastKnownRate = rate;  // Cache for subsequent edits
+              console.log('[PRICING CASCADE] Derived rate from price/hours:', rate, 'and cached to _lastKnownRate');
+            }
+          }
+        }
+      }
+      if (rate === undefined || rate === 0) {
+        rate = window.pricingData?.customRates?.get(deliverableCode);
+      }
+      if (rate === undefined || rate === 0) {
+        rate = window.pricingData?.customRates?.get(safeDelivCode);
+      }
+      if (rate === undefined || rate === 0) {
+        let rateInput = document.getElementById(`rate-${deliverableCode}`);
+        if (!rateInput) {
+          rateInput = document.getElementById(`rate-${safeDelivCode}`);
+        }
+        const domRate = parseFloat(rateInput?.value);
+        if (!isNaN(domRate) && domRate > 0) {
+          rate = domRate;
+        }
+      }
+      // Final fallback - only use 210 if absolutely no rate found
+      if (rate === undefined || rate === null || isNaN(rate) || rate === 0) {
+        rate = 210;
+        console.log('[PRICING CASCADE] WARNING: Using fallback rate 210 for', deliverableCode);
+      }
+      console.log('[PRICING CASCADE] Rate for', deliverableCode, '=', rate);
+      const newPrice = Math.round(totalHours * rate * 100) / 100;
+      
+      // Update deliverable hours input in UI - try raw code first, then sanitized
+      let delivHoursInput = document.getElementById(`hours-${deliverableCode}`);
+      if (!delivHoursInput) {
+        delivHoursInput = document.getElementById(`hours-${safeDelivCode}`);
+      }
+      if (delivHoursInput) {
+        delivHoursInput.value = totalHours; // Preserve fractional hours
+      }
+      
+      // Update deliverable price display - try raw code first, then sanitized
+      let priceCell = document.getElementById(`price-period-${deliverableCode}`);
+      if (!priceCell) {
+        priceCell = document.getElementById(`price-period-${safeDelivCode}`);
+      }
+      if (priceCell) {
+        priceCell.textContent = '$' + newPrice.toLocaleString();
+      }
+      
+      // Update SCENARIO_A.items with new totals
+      if (window.SCENARIO_A && window.SCENARIO_A.items) {
+        const item = window.SCENARIO_A.items.find(i => 
+          (i.deliverable_code || i.Deliverable_Code || '').toUpperCase() === deliverableCode.toUpperCase()
+        );
+        if (item) {
+          console.log('[PRICING CASCADE] Updating SCENARIO_A item:', deliverableCode, 
+                      'hours:', item.total_hours, '->', totalHours,
+                      'price:', item.price, '->', newPrice);
+          item.total_hours = totalHours;
+          item.Planned_Hours = totalHours;
+          item.hours = totalHours;
+          item.price = newPrice;
+          item.Price_USD = newPrice;
+          item.price_usd = newPrice;
+        }
+      }
+      
+      // Update summary totals in UI
+      recalculatePricingSummary();
+    }
+    window.updateDeliverableTotalFromComponents = updateDeliverableTotalFromComponents;
+    
+    // Recalculate One-Time / Retainer / Grand Total summaries
+    function recalculatePricingSummary() {
+      if (!window.SCENARIO_A || !window.SCENARIO_A.items) return;
+      
+      let oneTimeHours = 0, oneTimeCost = 0, oneTimeCount = 0;
+      let retainerHours = 0, retainerCost = 0, retainerCount = 0;
+      
+      window.SCENARIO_A.items.forEach(item => {
+        const isRetainer = item.is_retainer || item.retainer;
+        const hours = item.total_hours || 0;
+        const price = item.price || 0;
+        
+        if (isRetainer) {
+          retainerCount++;
+          retainerHours += hours;
+          retainerCost += price;
+        } else {
+          oneTimeCount++;
+          oneTimeHours += hours;
+          oneTimeCost += price;
+        }
+      });
+      
+      // Update UI
+      const oneTimeCountEl = document.getElementById('one-time-count');
+      const oneTimeHoursEl = document.getElementById('one-time-hours');
+      const oneTimeCostEl = document.getElementById('one-time-cost');
+      const grandTotalEl = document.getElementById('grand-total-cost');
+      
+      if (oneTimeCountEl) oneTimeCountEl.textContent = oneTimeCount;
+      if (oneTimeHoursEl) oneTimeHoursEl.textContent = oneTimeHours.toFixed(1);
+      if (oneTimeCostEl) oneTimeCostEl.textContent = '$' + oneTimeCost.toLocaleString();
+      
+      const grandTotal = oneTimeCost + (retainerCost * 12);
+      if (grandTotalEl) grandTotalEl.textContent = '$' + grandTotal.toLocaleString();
+      
+      console.log('[PRICING CASCADE] Summary updated - Hours:', oneTimeHours, 'Cost:', oneTimeCost, 'Grand:', grandTotal);
+    }
+    window.recalculatePricingSummary = recalculatePricingSummary;
     
     function updateComponentPricingRate(deliverableCode, componentName, rate) {
       const numRate = parseFloat(rate) || 210;
@@ -2650,6 +2815,9 @@
       
       // Recalculate cost display for this component
       recalculateComponentPricingCost(deliverableCode, componentName);
+      
+      // CASCADE UPDATE: Recalculate parent deliverable price and update UI + SCENARIO_A
+      updateDeliverableTotalFromComponents(deliverableCode);
     }
     window.updateComponentPricingRate = updateComponentPricingRate;
     

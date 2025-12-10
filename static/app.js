@@ -1338,6 +1338,9 @@ let pricingData = {
   hoursDeltas: new Map()             // Maps compKey -> delta (new - original)
 };
 
+// Expose pricingData globally so index.html can access delta tracking maps
+window.pricingData = pricingData;
+
 // Cache for component data per deliverable code
 const componentDataCache = {};
 window.componentDataCache = componentDataCache;
@@ -3709,59 +3712,29 @@ async function onUpdatePricingDetailsClick() {
   }
   
   try {
-    // DELTA-BASED PRICING: Apply only user's hour deltas to scenario totals
-    // This avoids the problem of DOM defaults not matching scenario allocations
-    if (window.SCENARIO_A && window.SCENARIO_A.items && window.pricingData?.hoursDeltas) {
-      console.log('[PRICING] Applying DELTA-BASED updates...');
-      
-      // Group deltas by deliverable code
-      const deliverableDeltas = new Map();
-      
-      for (const [compKey, delta] of window.pricingData.hoursDeltas.entries()) {
-        if (delta === 0) continue; // Skip unchanged components
-        
-        // Extract deliverable code from compKey (format: "DEL-XXXX::ComponentName")
-        const delivCode = compKey.split('::')[0].toUpperCase();
-        
-        if (!deliverableDeltas.has(delivCode)) {
-          deliverableDeltas.set(delivCode, 0);
-        }
-        deliverableDeltas.set(delivCode, deliverableDeltas.get(delivCode) + delta);
-        
-        console.log(`[PRICING DELTA] ${compKey}: delta=${delta}, deliverable ${delivCode} cumulative=${deliverableDeltas.get(delivCode)}`);
-      }
-      
-      console.log('[PRICING] Deliverable deltas to apply:', Object.fromEntries(deliverableDeltas));
-      
-      // Apply deltas to SCENARIO_A items
-      for (const item of window.SCENARIO_A.items) {
-        const delivCode = (item.deliverable_code || item.Deliverable_Code || '').toUpperCase();
-        
-        if (deliverableDeltas.has(delivCode)) {
-          const delta = deliverableDeltas.get(delivCode);
-          const originalHours = item.total_hours || 0;
-          const newHours = Math.max(0, originalHours + delta); // Don't go negative
-          const rate = item.effective_rate || item.blended_rate || 210;
-          const newPrice = Math.round(newHours * rate * 100) / 100;
-          
-          console.log(`[PRICING] Applying delta to ${delivCode}: ${originalHours}h + ${delta}h = ${newHours}h, $${item.price || 0} -> $${newPrice}`);
-          
-          // Update all hour/price fields
-          item.total_hours = newHours;
-          item.Planned_Hours = newHours;
-          item.hours = newHours;
-          item.price = newPrice;
-          item.Price_USD = newPrice;
-          item.price_usd = newPrice;
-        }
-      }
-      
-      // Clear deltas after applying (they've been incorporated into scenario)
-      window.pricingData.hoursDeltas.clear();
-      // Update original hours to match new values (for next edit cycle)
-      window.pricingData.originalComponentHours.clear();
-      console.log('[PRICING] Cleared deltas and originals for next edit cycle');
+    // GPT 5.1 Pro CASCADE SYSTEM: SCENARIO_A.items are now updated in real-time
+    // by updateDeliverableTotalFromComponents when component hours/rates change.
+    // We just need to sync the current state to backend.
+    console.log('[PRICING] CASCADE MODE: SCENARIO_A already has updated totals from component edits');
+    
+    // Log current state for debugging
+    if (window.SCENARIO_A && window.SCENARIO_A.items) {
+      const summary = window.SCENARIO_A.items.map(item => ({
+        code: item.deliverable_code || item.Deliverable_Code,
+        hours: item.total_hours,
+        price: item.price
+      }));
+      console.log('[PRICING] Current SCENARIO_A state:', JSON.stringify(summary, null, 2));
     }
+    
+    // Clear delta tracking (they've been applied via cascade updates)
+    if (window.pricingData?.hoursDeltas) {
+      window.pricingData.hoursDeltas.clear();
+    }
+    if (window.pricingData?.originalComponentHours) {
+      window.pricingData.originalComponentHours.clear();
+    }
+    console.log('[PRICING] Cleared deltas for next edit cycle');
     
     // Sync updated scenario to backend and get authoritative totals
     const backendData = await rebuildPricingFromBackend(window.SCENARIO_A);
