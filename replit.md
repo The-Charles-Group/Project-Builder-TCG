@@ -56,6 +56,11 @@ Preferred communication style: Simple, everyday language.
   - Part 4 Guard: Skips pricingData.customHours overwrite if item already has component_hours
   - `ensureScenarioSyncedBeforeExport()`: Pre-export function that collects scenario from UI, syncs to backend via `/api/scenario/sync`, and clears dirty flags only on successful sync
   - Dirty flag triad: `window.pricingDetailsDirty`, `window.pricingDirty`, `window.SCENARIO_DIRTY` all set by `applyPricingEditToScenario()` when component hours change
+- **Deliverable Hours Component Sum Fix (Dec 2025)**: `updatePricingTable()` now calculates deliverable hours from component sum on initial render (not stale stored values):
+  - Priority chain for component hours: `pricingData.customHours.has(compKey)` → `item.component_hours[comp.name]` → `comp.hours ?? comp.total_hours ?? comp.Planned_Hours ?? comp.planned_hours ?? 0`
+  - Componentized deliverables: ALWAYS use component sum, clear stale deliverable-level overrides, render hours input as read-only
+  - Non-componentized deliverables: Use `.has()` to respect explicit zero overrides via pricingData
+  - Zero-value handling: Uses `.has()` and nullish coalescing (`??`) throughout to preserve explicit zero overrides
 - **Parallel Processing**: Utilizes OpenAI Vision API for parallel PDF image processing.
 - **Smart Image Analysis**: Two-tier image processing system with pre-filtering and deep analysis.
 - **Session Isolation System**: Complete data isolation between different RFPs using unique session IDs.
