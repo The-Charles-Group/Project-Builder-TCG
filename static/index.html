@@ -2912,9 +2912,40 @@
           hours = item.total_hours || 0;
         }
         
-        // Calculate price from hours × rate (consistent with display)
-        const rate = item.effective_rate || item.blended_rate || item.Rate_USD || 210;
-        const price = hasComponents ? hours * rate : (item.price || 0);
+        // Calculate price: for components, sum (hours × rate) per component to preserve rate overrides
+        const delivRate = item.effective_rate || item.blended_rate || item.Rate_USD || 210;
+        let price;
+        
+        if (hasComponents) {
+          // Sum each component's (hours × rate) to preserve per-component rate overrides
+          price = item.components.reduce((sum, comp) => {
+            let compHours;
+            const compKey = `${delivCode}::${comp.name || comp.component}`;
+            
+            // Get hours with priority chain
+            if (window.pricingData && window.pricingData.customHours && window.pricingData.customHours.has(compKey)) {
+              compHours = window.pricingData.customHours.get(compKey);
+            } else if (item.component_hours && item.component_hours[comp.name || comp.component] !== undefined) {
+              compHours = item.component_hours[comp.name || comp.component];
+            } else {
+              compHours = comp.hours ?? comp.total_hours ?? comp.Planned_Hours ?? comp.planned_hours ?? 0;
+            }
+            
+            // Get rate with priority chain - preserves component-level rate overrides
+            let compRate;
+            if (window.pricingData && window.pricingData.customRates && window.pricingData.customRates.has(compKey)) {
+              compRate = window.pricingData.customRates.get(compKey);
+            } else if (comp.rate !== undefined) {
+              compRate = comp.rate;
+            } else {
+              compRate = delivRate;  // Fall back to deliverable rate
+            }
+            
+            return sum + ((parseFloat(compHours) || 0) * (parseFloat(compRate) || delivRate));
+          }, 0);
+        } else {
+          price = hours * delivRate;
+        }
         
         if (isRetainer) {
           retainerCount++;
@@ -3027,11 +3058,42 @@
           hours = item.total_hours || 0;
         }
         
-        // Calculate price from hours × rate
-        const rate = item.effective_rate || item.blended_rate || item.Rate_USD || 210;
-        const price = hasComponents ? hours * rate : (item.price || 0);
+        // Calculate price: for components, sum (hours × rate) per component to preserve rate overrides
+        let price;
+        const delivRate = item.effective_rate || item.blended_rate || item.Rate_USD || 210;
         
-        // Update item with recalculated values
+        if (hasComponents) {
+          // Sum each component's (hours × rate) to preserve per-component rate overrides
+          price = item.components.reduce((sum, comp) => {
+            let compHours;
+            const compKey = `${delivCode}::${comp.name || comp.component}`;
+            
+            // Get hours with priority chain
+            if (window.pricingData && window.pricingData.customHours && window.pricingData.customHours.has(compKey)) {
+              compHours = window.pricingData.customHours.get(compKey);
+            } else if (item.component_hours && item.component_hours[comp.name || comp.component] !== undefined) {
+              compHours = item.component_hours[comp.name || comp.component];
+            } else {
+              compHours = comp.hours ?? comp.total_hours ?? comp.Planned_Hours ?? comp.planned_hours ?? 0;
+            }
+            
+            // Get rate with priority chain - preserves component-level rate overrides
+            let compRate;
+            if (window.pricingData && window.pricingData.customRates && window.pricingData.customRates.has(compKey)) {
+              compRate = window.pricingData.customRates.get(compKey);
+            } else if (comp.rate !== undefined) {
+              compRate = comp.rate;
+            } else {
+              compRate = delivRate;  // Fall back to deliverable rate
+            }
+            
+            return sum + ((parseFloat(compHours) || 0) * (parseFloat(compRate) || delivRate));
+          }, 0);
+        } else {
+          price = hours * delivRate;
+        }
+        
+        // Update item with recalculated values (preserve component rate overrides, don't overwrite)
         item.total_hours = hours;
         item.hours = hours;
         item.Planned_Hours = hours;
