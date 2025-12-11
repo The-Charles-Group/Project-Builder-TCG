@@ -2,6 +2,8 @@ import os, re, io, math, json, datetime, urllib.parse, tempfile, base64
 import uuid
 import importlib
 import asyncio
+import psycopg2
+from psycopg2.extras import Json
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional, Dict, Any, Tuple, Set, Union
@@ -744,6 +746,73 @@ import asyncio
 # Per-session locks to prevent race conditions during concurrent updates
 _SESSION_LOCKS: Dict[str, asyncio.Lock] = {}
 
+# ============================================================
+# DATABASE PERSISTENCE FOR SCENARIO_STORE
+# ============================================================
+def _get_db_connection():
+    """Get PostgreSQL database connection from environment."""
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        return None
+    try:
+        return psycopg2.connect(database_url)
+    except Exception as e:
+        print(f"[DB] Failed to connect: {e}")
+        return None
+
+def _save_scenario_to_db(session_id: str, state: Dict[str, Any]) -> bool:
+    """Persist scenario state to PostgreSQL for survival across restarts."""
+    if not session_id:
+        return False
+    conn = _get_db_connection()
+    if not conn:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO scenario_store (session_id, scenario_data, updated_at)
+                VALUES (%s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (session_id) 
+                DO UPDATE SET scenario_data = EXCLUDED.scenario_data, updated_at = CURRENT_TIMESTAMP
+            """, (session_id, Json(state)))
+        conn.commit()
+        print(f"[DB] Saved scenario for session {session_id}")
+        return True
+    except Exception as e:
+        print(f"[DB] Failed to save scenario: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+def _load_scenario_from_db(session_id: str) -> Optional[Dict[str, Any]]:
+    """Load scenario state from PostgreSQL."""
+    if not session_id:
+        return None
+    conn = _get_db_connection()
+    if not conn:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT scenario_data FROM scenario_store WHERE session_id = %s",
+                (session_id,)
+            )
+            row = cur.fetchone()
+            if row and row[0]:
+                data = row[0]
+                # psycopg2 may return JSONB as string - decode if needed
+                if isinstance(data, str):
+                    data = json.loads(data)
+                print(f"[DB] Loaded scenario for session {session_id}")
+                return data
+        return None
+    except Exception as e:
+        print(f"[DB] Failed to load scenario: {e}")
+        return None
+    finally:
+        conn.close()
+
 def _get_session_lock(session_id: str) -> asyncio.Lock:
     """Get or create a lock for a session to prevent concurrent mutations."""
     if session_id not in _SESSION_LOCKS:
@@ -761,6 +830,8 @@ def get_session_state(session_id: str) -> Dict[str, Any]:
         "totals": {...},
         "metadata": {...}
     }
+    
+    PERSISTENCE: Loads from PostgreSQL if not in memory (survives server restarts).
     """
     # Guard against None or empty session_id to prevent SCENARIO_STORE[None] entries
     if not session_id:
@@ -776,16 +847,21 @@ def get_session_state(session_id: str) -> Dict[str, Any]:
         }
     
     if session_id not in SCENARIO_STORE:
-        SCENARIO_STORE[session_id] = {
-            "baseline": None,
-            "scenario": None,
-            "totals": {"hours": 0.0, "price": 0.0},
-            "metadata": {
-                "created_at": time.time(),
-                "updated_at": time.time(),
-                "last_sync": None
+        # Try to load from database first (persistence across restarts)
+        db_state = _load_scenario_from_db(session_id)
+        if db_state:
+            SCENARIO_STORE[session_id] = db_state
+        else:
+            SCENARIO_STORE[session_id] = {
+                "baseline": None,
+                "scenario": None,
+                "totals": {"hours": 0.0, "price": 0.0},
+                "metadata": {
+                    "created_at": time.time(),
+                    "updated_at": time.time(),
+                    "last_sync": None
+                }
             }
-        }
     
     # Auto-migrate old format entries
     entry = SCENARIO_STORE[session_id]
@@ -830,6 +906,8 @@ def set_baseline_and_scenario(session_id: str, scenario: dict):
     """
     Set both baseline and working scenario from Step 2 build.
     Called when building a new scenario or resetting.
+    
+    PERSISTENCE: Also saves to PostgreSQL for survival across restarts.
     """
     now = time.time()
     
@@ -842,7 +920,7 @@ def set_baseline_and_scenario(session_id: str, scenario: dict):
     # Recompute totals to ensure consistency
     scenario = _recompute_totals(scenario)
     
-    SCENARIO_STORE[session_id] = {
+    state = {
         "baseline": copy.deepcopy(scenario),
         "scenario": scenario,
         "totals": scenario.get("totals", {"hours": 0.0, "price": 0.0}),
@@ -852,12 +930,18 @@ def set_baseline_and_scenario(session_id: str, scenario: dict):
             "last_sync": now
         }
     }
+    SCENARIO_STORE[session_id] = state
+    
+    # Persist to database for survival across restarts
+    _save_scenario_to_db(session_id, state)
 
 def update_working_scenario(session_id: str, scenario: dict) -> dict:
     """
     Update only the working scenario (not baseline).
     Called during Step 3 edits.
     Returns the updated scenario with recomputed totals.
+    
+    PERSISTENCE: Also saves to PostgreSQL for survival across restarts.
     """
     state = get_session_state(session_id)
     
@@ -869,6 +953,10 @@ def update_working_scenario(session_id: str, scenario: dict) -> dict:
     state["metadata"]["updated_at"] = time.time()
     
     SCENARIO_STORE[session_id] = state
+    
+    # Persist to database for survival across restarts
+    _save_scenario_to_db(session_id, state)
+    
     return scenario
 
 def reset_scenario_from_baseline(session_id: str) -> dict:
@@ -876,6 +964,8 @@ def reset_scenario_from_baseline(session_id: str) -> dict:
     Reset working scenario to baseline (deepcopy).
     Called by "Reset from Step 2" button.
     Returns the reset scenario.
+    
+    PERSISTENCE: Also saves to PostgreSQL for survival across restarts.
     """
     state = get_session_state(session_id)
     
@@ -892,6 +982,10 @@ def reset_scenario_from_baseline(session_id: str) -> dict:
     state["metadata"]["updated_at"] = time.time()
     
     SCENARIO_STORE[session_id] = state
+    
+    # Persist to database for survival across restarts
+    _save_scenario_to_db(session_id, state)
+    
     return reset_scenario
 
 def get_working_scenario(session_id: str) -> dict:
