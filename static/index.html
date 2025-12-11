@@ -2778,8 +2778,94 @@
         }
       }
       
-      // Update summary totals in UI
+      // Update summary totals in UI AND Step 3 table (unified refresh)
+      // Use skipRender to avoid re-rendering Step 3 on every keystroke (performance)
+      // Full refresh with render happens on blur/Update Pricing
       recalculatePricingSummary();
+      
+      // Also update SCENARIO_A.totals so Step 3 totals line can update
+      if (window.SCENARIO_A && window.SCENARIO_A.totals) {
+        let totalHours = 0, totalPrice = 0;
+        window.SCENARIO_A.items.forEach(i => {
+          totalHours += (i.total_hours || 0);
+          totalPrice += (i.price || 0);
+        });
+        window.SCENARIO_A.totals.hours = totalHours;
+        window.SCENARIO_A.totals.price = totalPrice;
+        
+        // Update Step 3 totals display directly (without full re-render)
+        const totalsDiv = document.getElementById('scenarioA-totals');
+        if (totalsDiv) {
+          totalsDiv.innerHTML = `Totals — Hours: ${window.fmtInt(totalHours)}, Price: ${window.fmtUSD0(totalPrice)}`;
+        }
+        
+        // Also update Step 3 table row for this deliverable
+        const scenarioTable = document.getElementById('scenarioA-table');
+        if (scenarioTable) {
+          // Try matching by deliverable code first, then by name/title
+          let row = scenarioTable.querySelector(`tr[data-deliverable="${deliverableCode}"]`);
+          if (!row) {
+            // Fallback: find by matching the first cell text (deliverable name)
+            const item = window.SCENARIO_A.items.find(i => 
+              (i.deliverable_code || i.Deliverable_Code || '').toUpperCase() === deliverableCode.toUpperCase()
+            );
+            if (item) {
+              const delivName = item.deliverable || item.deliverable_name || item.Deliverable_Name || '';
+              const rows = scenarioTable.querySelectorAll('tbody tr');
+              for (const r of rows) {
+                const firstCell = r.querySelector('td');
+                if (firstCell && firstCell.textContent.includes(delivName)) {
+                  row = r;
+                  break;
+                }
+              }
+            }
+          }
+          if (row) {
+            // Find the item for this deliverable
+            const item = window.SCENARIO_A.items.find(i => 
+              (i.deliverable_code || i.Deliverable_Code || '').toUpperCase() === deliverableCode.toUpperCase()
+            );
+            if (item) {
+              // Update hours - BOTH display and input elements
+              const hoursCell = row.querySelector('.editable-hours');
+              if (hoursCell) {
+                const displaySpan = hoursCell.querySelector('.display-value');
+                const input = hoursCell.querySelector('.edit-input');
+                if (displaySpan) displaySpan.textContent = window.fmtInt(item.total_hours);
+                if (input) {
+                  input.value = item.total_hours;
+                  input.dataset.original = item.total_hours; // Update original value for blur handlers
+                }
+                hoursCell.dataset.original = item.total_hours;
+              }
+              
+              // Update total price display (7th column is Total Price)
+              const priceCells = row.querySelectorAll('td');
+              if (priceCells.length >= 7) {
+                const totalPriceCell = priceCells[6];
+                if (totalPriceCell) totalPriceCell.textContent = window.fmtUSD0(item.price);
+              }
+              
+              // Also update the currentScenario_scenarioA if it exists (used by blur handlers)
+              if (window.currentScenario_scenarioA && window.currentScenario_scenarioA.items) {
+                const scenItem = window.currentScenario_scenarioA.items.find(i =>
+                  (i.deliverable_code || i.deliverable || '').toUpperCase() === deliverableCode.toUpperCase()
+                );
+                if (scenItem) {
+                  scenItem.total_hours = item.total_hours;
+                  scenItem.price = item.price;
+                }
+                // Update totals too
+                if (window.currentScenario_scenarioA.totals) {
+                  window.currentScenario_scenarioA.totals.hours = totalHours;
+                  window.currentScenario_scenarioA.totals.price = totalPrice;
+                }
+              }
+            }
+          }
+        }
+      }
     }
     window.updateDeliverableTotalFromComponents = updateDeliverableTotalFromComponents;
     
@@ -2892,6 +2978,93 @@
       console.log('[PRICING CASCADE] Summary updated - OneTime:', oneTimeCost, 'RetainerAnnual:', retainerAnnualCost, 'Grand:', grandTotal);
     }
     window.recalculatePricingSummary = recalculatePricingSummary;
+    
+    // UNIFIED PRICING SYNC: refreshScenarioState() - Single function to sync all displays
+    // This recalculates SCENARIO_A.totals, re-renders Step 3 table, updates all summaries, and syncs to backend
+    async function refreshScenarioState(options = {}) {
+      const { syncToBackend = true, skipRender = false } = options;
+      
+      if (!window.SCENARIO_A || !window.SCENARIO_A.items) {
+        console.warn('[REFRESH] No SCENARIO_A to refresh');
+        return;
+      }
+      
+      console.log('[REFRESH] Starting unified scenario state refresh...');
+      
+      // 1. Recalculate SCENARIO_A.totals from items
+      let totalHours = 0;
+      let totalPrice = 0;
+      
+      window.SCENARIO_A.items.forEach(item => {
+        const delivCode = item.deliverable_code || item.Deliverable_Code || '';
+        const hasComponents = item.components && item.components.length > 0;
+        
+        // Calculate hours from component sum when components exist (same logic as display)
+        let hours;
+        if (hasComponents) {
+          hours = item.components.reduce((sum, comp) => {
+            let compHours;
+            const compKey = `${delivCode}::${comp.name || comp.component}`;
+            if (window.pricingData && window.pricingData.customHours && window.pricingData.customHours.has(compKey)) {
+              compHours = window.pricingData.customHours.get(compKey);
+            } else if (item.component_hours && item.component_hours[comp.name || comp.component] !== undefined) {
+              compHours = item.component_hours[comp.name || comp.component];
+            } else {
+              compHours = comp.hours ?? comp.total_hours ?? comp.Planned_Hours ?? comp.planned_hours ?? 0;
+            }
+            return sum + (parseFloat(compHours) || 0);
+          }, 0);
+        } else {
+          hours = item.total_hours || 0;
+        }
+        
+        // Calculate price from hours × rate
+        const rate = item.effective_rate || item.blended_rate || item.Rate_USD || 210;
+        const price = hasComponents ? hours * rate : (item.price || 0);
+        
+        // Update item with recalculated values
+        item.total_hours = hours;
+        item.hours = hours;
+        item.Planned_Hours = hours;
+        item.price = price;
+        item.Price_USD = price;
+        item.price_usd = price;
+        
+        totalHours += hours;
+        totalPrice += price;
+      });
+      
+      // Update SCENARIO_A.totals
+      if (!window.SCENARIO_A.totals) {
+        window.SCENARIO_A.totals = {};
+      }
+      window.SCENARIO_A.totals.hours = totalHours;
+      window.SCENARIO_A.totals.price = totalPrice;
+      
+      console.log('[REFRESH] SCENARIO_A.totals updated:', { hours: totalHours, price: totalPrice });
+      
+      // 2. Re-render Step 3 table (Project Scenario)
+      if (!skipRender && typeof renderScenario === 'function') {
+        renderScenario('scenarioA', window.SCENARIO_A);
+        console.log('[REFRESH] Step 3 table re-rendered');
+      }
+      
+      // 3. Update all pricing summaries (One-Time, Retainers, Grand Total)
+      recalculatePricingSummary();
+      
+      // 4. Sync to backend if requested
+      if (syncToBackend && typeof window.syncScenarioToBackend === 'function') {
+        try {
+          await window.syncScenarioToBackend(window.SCENARIO_A);
+          console.log('[REFRESH] Synced to backend');
+        } catch (err) {
+          console.warn('[REFRESH] Backend sync failed:', err.message);
+        }
+      }
+      
+      console.log('[REFRESH] Unified scenario state refresh complete');
+    }
+    window.refreshScenarioState = refreshScenarioState;
     
     function updateComponentPricingRate(deliverableCode, componentName, rate) {
       const numRate = parseFloat(rate) || 210;
@@ -3098,23 +3271,29 @@
           await window.ScenarioStore.flushPatchesNow();
         }
         
-        // 2) CRITICAL: Collect ALL data from UI (hours/rates/metadata) - USE RETURNED VALUE
-        if (typeof window.collectScenarioFromUi === 'function') {
-          console.log(`[Export] Collecting ALL UI data (hours/rates/metadata) for Scenario ${letter}...`);
-          const collectedScenario = window.collectScenarioFromUi(scen);
-          if (collectedScenario) {
-            scen = collectedScenario;
-            // Update global SCENARIO_A if this is scenario A
-            if (letter === 'A') {
-              window.SCENARIO_A = collectedScenario;
+        // 2) UNIFIED SYNC: Use refreshScenarioState to ensure all data is consistent
+        // This recalculates totals from components, updates SCENARIO_A, and syncs to backend
+        if (typeof window.refreshScenarioState === 'function') {
+          console.log(`[Export] Running unified refreshScenarioState for Scenario ${letter}...`);
+          await window.refreshScenarioState({ syncToBackend: true, skipRender: true });
+          scen = window.SCENARIO_A; // Use refreshed scenario
+        } else {
+          // Fallback to old method if refreshScenarioState not available
+          if (typeof window.collectScenarioFromUi === 'function') {
+            console.log(`[Export] Collecting ALL UI data (hours/rates/metadata) for Scenario ${letter}...`);
+            const collectedScenario = window.collectScenarioFromUi(scen);
+            if (collectedScenario) {
+              scen = collectedScenario;
+              if (letter === 'A') {
+                window.SCENARIO_A = collectedScenario;
+              }
             }
           }
-        }
-        
-        // 3) Sync the collected scenario to backend
-        if (typeof window.syncScenarioToBackend === 'function') {
-          console.log(`[Export] Syncing Scenario ${letter} to backend before export...`);
-          await window.syncScenarioToBackend(scen);
+          
+          if (typeof window.syncScenarioToBackend === 'function') {
+            console.log(`[Export] Syncing Scenario ${letter} to backend before export...`);
+            await window.syncScenarioToBackend(scen);
+          }
         }
         
         console.log(`[Export] Scenario ${letter} synced successfully before export`);
