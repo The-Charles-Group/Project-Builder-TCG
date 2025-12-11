@@ -3584,7 +3584,10 @@ function applyPricingEditToScenario(dcode, component, field, value) {
     }
   }
   
+  // Set ALL dirty flags so exports trigger sync
   window.pricingDetailsDirty = true;
+  window.pricingDirty = true;
+  window.SCENARIO_DIRTY = true;
   pricingDetailsDirty = true;
 }
 
@@ -3652,7 +3655,7 @@ function onPricingDetailsChange(e) {
   console.log('[PRICING] Delegated change handler:', { dcode, component, field, value });
   
   applyPricingEditToScenario(dcode, component, field, value);
-  window.pricingDetailsDirty = true;
+  // Note: applyPricingEditToScenario already sets all dirty flags
 }
 
 // Setup delegated event listener for pricing-details panel
@@ -4132,8 +4135,70 @@ async function initPricingStep() {
   }
 }
 
+// GPT 5.1 Pro: CRITICAL - Ensure scenario is synced before any export
+// This function MUST be called before XML, XLSX, CSV, PDF exports
+// It syncs component_hours and all other edits to the backend
+async function ensureScenarioSyncedBeforeExport(scenario = null, which = 'A') {
+  console.log('[EXPORT SYNC] ensureScenarioSyncedBeforeExport called', {
+    hasDirtyFlags: {
+      SCENARIO_DIRTY: window.SCENARIO_DIRTY,
+      pricingDetailsDirty: window.pricingDetailsDirty,
+      pricingDirty: window.pricingDirty
+    }
+  });
+  
+  // Use window.SCENARIO_A as authoritative source
+  const scenarioToSync = window.SCENARIO_A || scenario;
+  
+  if (!scenarioToSync) {
+    console.warn('[EXPORT SYNC] No scenario available to sync');
+    return;
+  }
+  
+  // Always sync before export to ensure component_hours reach backend
+  // Even if dirty flags are false, component edits may not have been synced
+  try {
+    // 1) Collect any remaining DOM state into scenario (preserves component_hours)
+    const collected = collectScenarioFromUi(scenarioToSync);
+    if (collected) {
+      window.SCENARIO_A = collected;
+    }
+    
+    // Log component_hours for debugging
+    const itemsWithComponentHours = (window.SCENARIO_A?.items || []).filter(item => 
+      item.component_hours && Object.keys(item.component_hours).length > 0
+    );
+    console.log('[EXPORT SYNC] Items with component_hours:', 
+      itemsWithComponentHours.map(item => ({
+        code: item.deliverable_code || item.Deliverable_Code,
+        component_hours: item.component_hours
+      }))
+    );
+    
+    // 2) Sync to backend via /api/scenario/sync
+    const syncSuccess = await syncScenarioToBackend(window.SCENARIO_A);
+    
+    if (syncSuccess) {
+      console.log('[EXPORT SYNC] Scenario synced to backend before export');
+      
+      // 3) Clear dirty flags only on successful sync
+      window.pricingDetailsDirty = false;
+      window.pricingDirty = false;
+      window.SCENARIO_DIRTY = false;
+    } else {
+      console.warn('[EXPORT SYNC] Sync failed - dirty flags NOT cleared, will retry on next export');
+    }
+    
+  } catch (error) {
+    console.error('[EXPORT SYNC] Failed to sync before export:', error);
+    // Don't throw - let export continue with best effort
+  }
+}
+
 // Export GPT 5.1 Pro functions to global scope
 window.pricingDetailsDirty = false;
+window.pricingDirty = false;
+window.SCENARIO_DIRTY = false;
 window.updateScenarioItem = updateScenarioItem;
 window.findScenarioItemByCode = findScenarioItemByCode;
 window.applyPricingEditToScenario = applyPricingEditToScenario;
@@ -4145,6 +4210,7 @@ window.collectScenarioFromUi = collectScenarioFromUi;
 window.onStep3BuildScenarioClick = onStep3BuildScenarioClick;
 window.onUpdatePricingDetailsClick = onUpdatePricingDetailsClick;
 window.initPricingStep = initPricingStep;
+window.ensureScenarioSyncedBeforeExport = ensureScenarioSyncedBeforeExport;
 
 // GPT 5.1 Pro: Call initPricingStep on app.js load to hydrate SCENARIO_A from backend
 // This is called directly from app.js to avoid timing issues with window.onload
