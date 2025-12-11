@@ -1,0 +1,333 @@
+1. Single source of truth: scenario shape
+
+This is the structure the backend expects per deliverable item in the scenario (simplified):
+
+{
+  "deliverable_code": "BID",          // Brand Identity Development
+  "Deliverable": "Brand Identity Development",
+  "Planned_Hours": 307,
+  "Rate_USD": 210,
+  "Price_USD": 64670,
+  "billing_cadence": "one-time",
+  // NEW: component-level overrides from Step 3
+  "component_hours": {
+    "Color Palette": 18,
+    "Graphic & Copy Messaging Cornerstones": 28,
+    "Graphic Mock-Ups": 30,
+    "Iconography": 32,
+    "Logo": 44,
+    "Overarching Moodboard": 27,
+    "Tagline Copy Bank": 22,
+    "Textures/Patterns/Materials": 30,
+    "Typography": 41,
+    "Visual Elements/Comps": 35   // <-- your override
+  }
+}
+
+
+build_wbs_with_pricing already does:
+
+component_overrides = d.get("component_hours") or d.get("component_hours_override") or {}
+
+
+and if present, it uses them to set component hours and the parent total.
+
+So if component_hours is present and correct in the scenario, the XML will be correct.
+
+2. Front‑end changes (Step 3)
+2.1. On step load: initPricingStep
+
+Goal: When you click Proceed to pricing, both panels (Project Scenario + Deliverable Pricing Details) should be filled from one scenario: window.SCENARIO_A.
+
+Ask Replit to implement / verify:
+
+async function initPricingStep(sessionId) {
+  // 1) Get existing working scenario that Step 2 created.
+  const res = await fetch('/api/scenarios', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, reset: false })
+  });
+
+  const data = await res.json();
+  window.SCENARIO_A = data.scenario;          // single source of truth
+
+  renderProjectScenario(window.SCENARIO_A);   // top table
+  renderPricingDetails(window.SCENARIO_A);    // component table
+}
+
+
+Important:
+Do not rebuild a fresh scenario on Step 3 load. Step 2 should do the initial build once; Step 3 only loads it.
+
+2.2. Tracking component edits in the scenario
+
+We need a single function that updates:
+
+item.component_hours[componentLabel]
+
+Parent hours fields (Planned_Hours, etc.)
+
+The UI parent row
+
+A pricingDetailsDirty flag so “Update Pricing” knows something changed.
+
+Ask them to wire every Hours input in the Deliverable Pricing Details panel to this:
+
+let pricingDetailsDirty = false;
+
+function onComponentHoursChange(delivCode, componentLabel, newValue) {
+  const scenario = window.SCENARIO_A;
+  if (!scenario || !scenario.items) return;
+
+  const item = scenario.items.find(
+    it => String(it.deliverable_code) === String(delivCode)
+  );
+  if (!item) return;
+
+  const hours = Number(newValue) || 0;
+
+  // 1) Ensure component_hours exists
+  if (!item.component_hours) {
+    item.component_hours = {};
+  }
+
+  // 2) Update that component
+  item.component_hours[componentLabel] = hours;
+
+  // 3) Re‑sum parent hours from ALL components (fixes the "+3 hours" bug)
+  const totalFromComponents = Object.values(item.component_hours)
+    .map(v => Number(v) || 0)
+    .reduce((a, b) => a + b, 0);
+
+  item.Planned_Hours = totalFromComponents;
+  item.planned_hours = totalFromComponents;
+  item.hours = totalFromComponents;
+
+  // 4) Reflect in the Project Scenario table parent row
+  updateProjectScenarioRow(delivCode, {
+    hours: totalFromComponents
+  });
+
+  pricingDetailsDirty = true;
+}
+
+
+Then, in the pricing details render code, each hours <input> should have:
+
+<input
+  value={hours}
+  onChange={e => onComponentHoursChange(delivCode, componentLabel, e.target.value)}
+/>
+
+2.3. Update Pricing button (in the Pricing Details panel)
+
+This button must:
+
+Send the updated scenario (with component_hours) to the backend.
+
+Ask the backend to rebuild the authoritative totals.
+
+Update the UI from the backend response.
+
+Clear the dirty flag.
+
+async function syncScenarioToBackend(scenario, sessionId) {
+  await fetch('/api/scenario/sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, scenario })
+  });
+}
+
+async function rebuildPricingFromBackend(scenario, sessionId) {
+  const res = await fetch('/api/pricing/rebuild_breakdown', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, scenario })
+  });
+
+  const data = await res.json();
+  return data.scenario;  // authoritative scenario from backend
+}
+
+async function handleUpdatePricing(sessionId) {
+  if (!pricingDetailsDirty) return;
+
+  const scenario = window.SCENARIO_A;
+  if (!scenario) return;
+
+  // 1) Persist edits (including component_hours) to backend
+  await syncScenarioToBackend(scenario, sessionId);
+
+  // 2) Get authoritative scenario + totals
+  const rebuiltScenario = await rebuildPricingFromBackend(scenario, sessionId);
+
+  // 3) Replace local scenario + re-render both panels
+  window.SCENARIO_A = rebuiltScenario;
+  renderProjectScenario(rebuiltScenario);
+  renderPricingDetails(rebuiltScenario);
+
+  pricingDetailsDirty = false;
+}
+
+
+Wire the Update Pricing CTA in the Deliverable Pricing Details panel to handleUpdatePricing(currentSessionId).
+
+2.4. Build Scenario button (top panel)
+
+Important: On Step 3, the Build Scenario button should not throw away your edits and rebuild from scratch.
+
+Instead, have it share the same path as Update Pricing:
+
+async function handleBuildScenario(sessionId) {
+  const scenario = window.SCENARIO_A;
+
+  // If no scenario yet (first time from Step 2), fall back to the original build call
+  if (!scenario || !scenario.items || !scenario.items.length) {
+    const data = await buildScenariosAB(sessionId); // existing endpoint
+    window.SCENARIO_A = data.scenario;
+    renderProjectScenario(window.SCENARIO_A);
+    renderPricingDetails(window.SCENARIO_A);
+    return;
+  }
+
+  // Otherwise, treat it like a save + recompute
+  await handleUpdatePricing(sessionId);
+}
+
+
+This guarantees one source of truth for Step 3: all edits flow into window.SCENARIO_A → backend → exports.
+
+3. Backend wiring (main.py)
+
+From the doc you shared, most of this is already present, but here’s what Replit should explicitly confirm / adjust:
+
+3.1. Merge scenario sync includes component_hours
+
+This already exists, but they should double‑check it matches exactly:
+
+def merge_scenario_from_sync(session_id: str):
+    sync_entry = SCENARIO_SYNC_STATE.get(session_id)
+    if not sync_entry or "scenario" not in sync_entry:
+        return
+
+    new_scen = sync_entry.get("scenario") or {}
+    if not new_scen:
+        return
+
+    state = get_session_state(session_id)
+    old_scen = (state.get("scenario") or {}).copy()
+
+    editable_fields = {
+        "billing_cadence", "cadence_units", "cadence_price",
+        "price_usd", "Price_USD", "total_price",
+        "planned_hours", "Planned_Hours", "hours",
+        "retainer", "retainer_months", "monthly_hours", "monthly_price",
+        "is_retainer", "Rate_USD", "rate_usd",
+        "component_hours", "component_hours_override",   # <-- critical
+    }
+    ...
+
+
+This part is already in your doc. I’m just calling it out because it’s where component_hours gets allowed through.
+
+3.2. Export must always use the latest synced scenario
+
+Add a helper:
+
+def ensure_scenario_synced_before_export(session_id: str) -> dict:
+    # Merge any pending SCENARIO_SYNC_STATE edits into SCENARIO_STORE
+    merge_scenario_from_sync(session_id)
+
+    state = get_session_state(session_id)
+    return state.get("scenario") or {}
+
+
+Then, in:
+
+/api/export_xml
+
+/api/export_excel
+
+/api/export_csv
+
+any timeline / Gantt endpoints that call build_wbs_with_pricing
+
+change the scenario acquisition to:
+
+scenario = ensure_scenario_synced_before_export(session_id)
+rows, prealloc_by_parent_wbs, uid_to_sched = build_wbs_with_pricing(
+    DB, scenario=scenario, ...
+)
+
+
+That guarantees all exports (XML, XLSX, CSV, PDFs) use the scenario that just got updated from Step 3.
+
+3.3. Debug logging for Replit (to prove it works)
+
+Ask them to temporarily add this inside build_wbs_with_pricing, just above:
+
+component_overrides = d.get("component_hours") or d.get("component_hours_override") or {}
+
+
+Add:
+
+print(f"[WBS DEBUG] session={session_id} dcode={dcode} "
+      f"component_hours={d.get('component_hours')} "
+      f"component_hours_override={d.get('component_hours_override')}")
+
+
+Then reproduce your test:
+
+Set Visual Elements/Comps = 35 in app.
+
+Click Update Pricing.
+
+Export Workfront XML.
+
+Check Replit logs for dcode of Brand Identity Development:
+
+If it prints ..."Visual Elements/Comps": 35... then the override is in the scenario.
+
+If it prints {} or 32, the front‑end isn’t sending the overrides correctly and they need to fix the JS wiring.
+
+4. What you can literally paste into Replit
+
+Here’s a short “ask” you can drop into Plan mode:
+
+We need Step 3 pricing edits (component hours) to flow all the way through to the XML / Workfront export.
+
+Requirements:
+
+On Step 3 load, call initPricingStep(session_id) which:
+
+POSTs /api/scenarios with {session_id, reset: false}
+
+stores the returned scenario as window.SCENARIO_A
+
+renders both the Project Scenario and Deliverable Pricing Details panels from window.SCENARIO_A (no second source of truth).
+
+Every Hours input in the Deliverable Pricing Details panel must call:
+
+onComponentHoursChange(delivCode, componentLabel, newValue) exactly as in the spec ChatGPT provided (update item.component_hours, recompute parent hours from the sum of components, update the parent row, set pricingDetailsDirty = true).
+
+The Update Pricing button must:
+
+call syncScenarioToBackend(window.SCENARIO_A, session_id) → POST /api/scenario/sync
+
+then call rebuildPricingFromBackend(window.SCENARIO_A, session_id) → POST /api/pricing/rebuild_breakdown
+
+replace window.SCENARIO_A with the returned scenario and re-render both panels
+
+clear pricingDetailsDirty.
+
+The Build Scenario button on Step 3 must reuse the same path as Update Pricing (save + recompute) when a scenario already exists, instead of rebuilding from scratch.
+
+In main.py, ensure:
+
+merge_scenario_from_sync includes "component_hours" and "component_hours_override" in editable_fields.
+
+All export / timeline endpoints call ensure_scenario_synced_before_export(session_id) and pass that scenario into build_wbs_with_pricing.
+
+Add debug logging in build_wbs_with_pricing to print component_hours for Brand Identity Development so we can confirm that Visual Elements/Comps shows 35h before XML generation.
