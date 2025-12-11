@@ -2417,8 +2417,43 @@ function updatePricingTable() {
     const isEditing = pricingDataEnhanced.editMode.get(item.deliverable_code) || false;
     
     // Get custom values or defaults
-    // Support both 'hours' and 'total_hours' field names from backend
-    const customHours = pricingData.customHours.get(item.deliverable_code) || item.hours || item.total_hours || 0;
+    // CRITICAL: If item has components, prefer component sum over stale stored deliverable value
+    // But respect explicit user overrides via pricingData.customHours
+    let customHours;
+    if (item.components && item.components.length > 0) {
+      // Calculate component sum as the baseline
+      // Use .has() to detect explicit zero overrides (0 is a valid value, not falsy fallback)
+      // Priority: pricingData override > parent's component_hours map > component object fields
+      const componentHoursSum = item.components.reduce((sum, comp) => {
+        const compKey = `${item.deliverable_code}::${comp.name}`;
+        let compHours;
+        if (pricingData.customHours.has(compKey)) {
+          // Explicit user override takes precedence
+          compHours = pricingData.customHours.get(compKey);
+        } else if (item.component_hours && item.component_hours[comp.name] !== undefined) {
+          // Parent's component_hours map (from SCENARIO_A edits)
+          compHours = item.component_hours[comp.name];
+        } else {
+          // Fallback chain to handle different backend field names
+          compHours = comp.hours ?? comp.total_hours ?? comp.Planned_Hours ?? comp.planned_hours ?? 0;
+        }
+        return sum + (parseFloat(compHours) || 0);
+      }, 0);
+      // For componentized items: ALWAYS use component sum - never use deliverable-level overrides
+      // This enforces component_hours as the single source of truth
+      // Any legacy overrides in pricingData.customHours for componentized items are ignored
+      customHours = componentHoursSum;
+      
+      // Clear any stale deliverable-level override to prevent future confusion
+      if (pricingData.customHours.has(item.deliverable_code)) {
+        pricingData.customHours.delete(item.deliverable_code);
+      }
+    } else {
+      // No components - respect explicit overrides (including zero) then fall back to stored value
+      customHours = pricingData.customHours.has(item.deliverable_code)
+        ? pricingData.customHours.get(item.deliverable_code)
+        : (item.hours || item.total_hours || 0);
+    }
     const customRate = pricingData.customRates.get(item.deliverable_code) || item.blended_rate || item.effective_rate || 210;
     const pricePerPeriod = customHours * customRate;
     const totalPrice = pricePerPeriod * periods;
@@ -2476,12 +2511,19 @@ function updatePricingTable() {
             '<span style="color: var(--muted);">-</span>'}
         </td>
         <td style="padding: 8px; text-align: center;">
-          <input type="number" id="hours-${item.deliverable_code}" value="${customHours}" 
-                  min="0" step="0.5"
-                  onchange="updateCustomHours('${item.deliverable_code}', this.value)"
-                  style="width: 80px; padding: 6px; border: 1px solid rgba(106,163,255,0.3); 
-                         border-radius: 4px; background: rgba(106,163,255,0.05); 
-                         color: var(--text); text-align: center; font-weight: 500;" />
+          ${item.components && item.components.length > 0 ? 
+            `<input type="number" id="hours-${item.deliverable_code}" value="${customHours}" 
+                    readonly
+                    title="Total is sum of components. Expand to edit individual components."
+                    style="width: 80px; padding: 6px; border: 1px solid rgba(106,163,255,0.2); 
+                           border-radius: 4px; background: rgba(106,163,255,0.02); 
+                           color: var(--muted); text-align: center; font-weight: 500; cursor: not-allowed;" />` :
+            `<input type="number" id="hours-${item.deliverable_code}" value="${customHours}" 
+                    min="0" step="0.5"
+                    onchange="updateCustomHours('${item.deliverable_code}', this.value)"
+                    style="width: 80px; padding: 6px; border: 1px solid rgba(106,163,255,0.3); 
+                           border-radius: 4px; background: rgba(106,163,255,0.05); 
+                           color: var(--text); text-align: center; font-weight: 500;" />`}
         </td>
         <td style="padding: 8px; text-align: center;">
           <div style="display: flex; align-items: center; gap: 2px; justify-content: center;">
