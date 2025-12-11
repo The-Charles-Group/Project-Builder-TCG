@@ -3740,18 +3740,18 @@ function collectScenarioFromUi(scenario) {
         const hasComponentHours = item.component_hours && Object.keys(item.component_hours).length > 0;
         
         if (hasComponentHours) {
-          // Use component_hours sum instead of DOM value
+          // ALWAYS use component_hours sum instead of DOM value - even if sum is 0
+          // This preserves user's granular component edits through the sync pipeline
           const componentHoursSum = Object.values(item.component_hours)
             .map(v => Number(v) || 0)
             .reduce((a, b) => a + b, 0);
           
-          if (componentHoursSum > 0) {
-            item.hours = componentHoursSum;
-            item.total_hours = componentHoursSum;
-            item.Planned_Hours = componentHoursSum;
-            item.planned_hours = componentHoursSum;
-            console.log(`[PRICING] Preserved component_hours-derived total for ${delivCode}: ${componentHoursSum}h`);
-          }
+          // Always apply the sum - removing the >0 check that was causing overwrites
+          item.hours = componentHoursSum;
+          item.total_hours = componentHoursSum;
+          item.Planned_Hours = componentHoursSum;
+          item.planned_hours = componentHoursSum;
+          console.log(`[PRICING] Preserved component_hours-derived total for ${delivCode}: ${componentHoursSum}h (from ${Object.keys(item.component_hours).length} components)`);
         } else if (hoursInput) {
           // No component_hours, use DOM value
           const hours = parseFloat(hoursInput.value) || 0;
@@ -3784,6 +3784,7 @@ function collectScenarioFromUi(scenario) {
   
   // ========== PART 3: Collect COMPONENT hours/rates from DOM inputs ==========
   // Components have data-component="DEL001::ComponentName" and data-parent="DEL001"
+  // IMPORTANT: Skip DOM hydration if parent deliverable has component_hours - that's authoritative
   document.querySelectorAll('tr[data-component]').forEach(row => {
     const compKey = row.getAttribute('data-component');
     const parentCode = row.getAttribute('data-parent');
@@ -3793,6 +3794,18 @@ function collectScenarioFromUi(scenario) {
     const parts = compKey.split('::');
     if (parts.length < 2) return;
     const componentName = parts.slice(1).join('::'); // Handle component names with :: in them
+    
+    // Check if parent deliverable has component_hours - if so, skip DOM hydration
+    const parentItem = collectedScenario.items?.find(i => 
+      String(i.deliverable_code || i.Deliverable_Code) === String(parentCode) &&
+      !i.component && !i.Component  // Parent deliverables don't have component field
+    );
+    const parentHasComponentHours = parentItem?.component_hours && Object.keys(parentItem.component_hours).length > 0;
+    
+    if (parentHasComponentHours) {
+      console.log(`[PRICING] Skipping DOM hydration for ${compKey} - parent ${parentCode} has component_hours`);
+      return; // Skip this component - parent's component_hours is authoritative
+    }
     
     // Look for inputs within the component row
     const hoursInput = row.querySelector('input[type="number"][onchange*="updateCustomHours"]');
@@ -3837,8 +3850,12 @@ function collectScenarioFromUi(scenario) {
     collectedScenario.items.forEach(item => {
       const code = item.deliverable_code || item.Deliverable_Code;
       
+      // Skip customHours if item has component_hours - component_hours is authoritative
+      const hasComponentHours = item.component_hours && Object.keys(item.component_hours).length > 0;
+      
       // Check for custom hours in pricingData (fallback if DOM didn't have the input)
-      if (pricingData.customHours && pricingData.customHours.has(code)) {
+      // BUT skip if component_hours exists - those take precedence
+      if (!hasComponentHours && pricingData.customHours && pricingData.customHours.has(code)) {
         const customHours = pricingData.customHours.get(code);
         if (customHours !== undefined && customHours !== null) {
           item.hours = customHours;
