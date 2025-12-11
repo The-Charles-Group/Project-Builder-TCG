@@ -947,14 +947,14 @@ def make_item_key(item: dict) -> str:
 
 def _recompute_totals(scn: dict) -> dict:
     """
-    Recompute Price_USD and totals for a scenario.
+    Recompute totals for a scenario - GPT 5.1 Pro compliant.
     
-    Pricing logic:
-    - If item has cadence pricing (price_usd/total_price set), use that as canonical price
-    - Otherwise, calculate Price_USD = Rate_USD * Planned_Hours
+    KEY PRINCIPLE: Trust provided values, do NOT rescale.
+    - If component_hours exists, parent hours = sum of component_hours values (exact sum)
+    - Otherwise, use existing hours/total_hours values as-is
+    - Price = hours × rate (unless cadence pricing is set)
     
-    Also keeps price_usd and Price_USD in sync for backward compatibility.
-    Updates totals.hours and totals.price.
+    This ensures component edits flow through correctly without rescaling.
     
     Args:
         scn: Scenario dictionary with 'items' list
@@ -967,17 +967,36 @@ def _recompute_totals(scn: dict) -> dict:
     total_price = 0.0
     
     for item in items:
-        # Get hours from item (using backward-compatible lookup)
         hours = 0.0
-        for key in ["Planned_Hours", "planned_hours", "hours", "total_hours"]:
-            if key in item and item[key] not in (None, ""):
-                try:
-                    hours = float(item[key])
-                    break
-                except (TypeError, ValueError):
-                    continue
         
-        # Check if item has cadence-based pricing (price_usd or total_price already set)
+        # GPT 5.1 Pro: If component_hours exists, parent hours = exact sum
+        component_hours = item.get("component_hours") or item.get("component_hours_override")
+        if component_hours and isinstance(component_hours, dict) and len(component_hours) > 0:
+            # Calculate exact sum from component_hours (no rounding per component)
+            for comp_name, comp_val in component_hours.items():
+                if comp_val is not None and comp_val != "":
+                    try:
+                        hours += float(comp_val)
+                    except (TypeError, ValueError):
+                        continue
+            # Update the item's hours fields to match the component sum
+            item["total_hours"] = hours
+            item["hours"] = hours
+            item["Planned_Hours"] = round(hours, 2)
+        else:
+            # No component_hours - use existing hours value as-is (trust it)
+            for key in ["total_hours", "hours", "Planned_Hours", "planned_hours"]:
+                if key in item and item[key] not in (None, ""):
+                    try:
+                        hours = float(item[key])
+                        break
+                    except (TypeError, ValueError):
+                        continue
+        
+        # Get rate for price calculation
+        rate = get_rate_from_item(item)
+        
+        # Check if item has cadence-based pricing (price_usd already set with intent)
         cadence_price = None
         for key in ["price_usd", "total_price", "price", "Price_USD"]:
             if key in item and item[key] not in (None, ""):
@@ -987,20 +1006,17 @@ def _recompute_totals(scn: dict) -> dict:
                 except (TypeError, ValueError):
                     continue
         
+        # Calculate price: use cadence price if set, otherwise hours × rate
         if cadence_price is not None and cadence_price > 0:
             item_price = cadence_price
         else:
-            rate = get_rate_from_item(item)
             item_price = round(rate * hours, 2)
         
         # Keep all price fields in sync
         item["Price_USD"] = round(item_price, 2)
         item["price_usd"] = item["Price_USD"]
         item["total_price"] = item["Price_USD"]
-        
-        # Ensure Planned_Hours is set
-        if "Planned_Hours" not in item:
-            item["Planned_Hours"] = round(hours, 2)
+        item["price"] = item["Price_USD"]
         
         # Accumulate totals
         total_hours += hours

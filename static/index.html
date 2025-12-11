@@ -2661,121 +2661,69 @@
     window.updateComponentPricingHours = updateComponentPricingHours;
     
     // Helper: Recalculate deliverable total from all component inputs and update everywhere
-    // ARCHITECT FIX: Use delta-based pricing - apply change from original to backend's authoritative total
-    // This prevents 300→306 drift caused by summing individually-rounded component hours
+    // GPT 5.1 Pro: Use component_hours map and exact sums - NO scaling, NO delta tracking
+    // Parent hours = sum of component_hours values (exact sum)
     function updateDeliverableTotalFromComponents(deliverableCode) {
-      // Component inputs use sanitized IDs (underscores), deliverable inputs use raw code
-      const safeDelivCode = deliverableCode.replace(/[^a-zA-Z0-9]/g, '_');
-      const componentInputs = document.querySelectorAll(`input[id^="hours-${safeDelivCode}__"]`);
+      if (!window.SCENARIO_A || !window.SCENARIO_A.items) return;
       
-      // DELTA-BASED PRICING: Calculate total delta from edits and apply to backend total
-      // This ensures +1h edit = +1h change regardless of component rounding
-      let totalDelta = 0;
-      componentInputs.forEach(input => {
+      // Find the item in SCENARIO_A
+      const item = window.SCENARIO_A.items.find(i => 
+        (i.deliverable_code || i.Deliverable_Code || '').toUpperCase() === deliverableCode.toUpperCase()
+      );
+      if (!item) {
+        console.warn('[GPT 5.1 Pro] Item not found:', deliverableCode);
+        return;
+      }
+      
+      // Ensure component_hours map exists
+      if (!item.component_hours) {
+        item.component_hours = {};
+      }
+      
+      // Read all component hours from DOM and update component_hours map
+      // Use data-parent attribute for reliable matching regardless of ID sanitization
+      const upperCode = deliverableCode.toUpperCase();
+      
+      // Try multiple selectors to find component inputs
+      const componentInputs = document.querySelectorAll(`
+        tr[data-parent="${deliverableCode}"] input[type="number"],
+        tr[data-parent="${upperCode}"] input[type="number"]
+      `);
+      
+      // Also try by ID pattern as fallback
+      const safeDelivCode = deliverableCode.replace(/[^a-zA-Z0-9]/g, '_');
+      const idBasedInputs = document.querySelectorAll(`input[id^="hours-${safeDelivCode}__"]`);
+      
+      // Combine both sets
+      const allInputs = new Set([...componentInputs, ...idBasedInputs]);
+      
+      allInputs.forEach(input => {
         const compKey = input.dataset.compkey;
         if (!compKey) return;
         
-        const currentValue = parseFloat(input.value) || 0;
-        // originalComponentHours stores the RENDERED value (Math.round'd) set at render time
-        const originalValue = window.pricingData?.originalComponentHours?.get(compKey);
+        // Extract component name from compKey (format: "DELIVCODE::ComponentName")
+        const parts = compKey.split('::');
+        const componentName = parts.length > 1 ? parts[1] : compKey;
         
-        if (originalValue !== undefined) {
-          const delta = currentValue - originalValue;
-          totalDelta += delta;
-          if (delta !== 0) {
-            console.log('[PRICING CASCADE] Component', compKey, 'delta:', delta);
-          }
-        }
+        const currentValue = parseFloat(input.value) || 0;
+        item.component_hours[componentName] = currentValue;
       });
       
-      // Get SCENARIO_A item to apply delta to backend total
-      let scenarioItem;
-      let backendTotalHours = 0;
-      if (window.SCENARIO_A && window.SCENARIO_A.items) {
-        scenarioItem = window.SCENARIO_A.items.find(i => 
-          (i.deliverable_code || i.Deliverable_Code || '').toUpperCase() === deliverableCode.toUpperCase()
-        );
-        if (scenarioItem) {
-          // Use cached original total if available, otherwise use current backend total
-          if (scenarioItem._backendOriginalHours === undefined) {
-            scenarioItem._backendOriginalHours = scenarioItem.total_hours || 0;
-          }
-          backendTotalHours = scenarioItem._backendOriginalHours;
-        }
-      }
+      // GPT 5.1 Pro: Calculate parent hours as EXACT SUM of component_hours
+      const totalHours = Object.values(item.component_hours)
+        .reduce((sum, h) => sum + (Number(h) || 0), 0);
       
-      // Apply delta to backend's authoritative total
-      const totalHours = backendTotalHours + totalDelta;
+      console.log('[GPT 5.1 Pro] Deliverable', deliverableCode, 
+                  'component_hours sum:', totalHours, 'map:', item.component_hours);
       
-      console.log('[PRICING CASCADE] Deliverable', deliverableCode, 
-                  'backend:', backendTotalHours, 'delta:', totalDelta, 'new total:', totalHours);
+      // Get rate for price calculation
+      let rate = item.effective_rate || item.blended_rate || item.rate_usd || 
+                 item.Rate_USD || item.rate || 210;
       
-      // Get rate for price calculation - check all possible sources
-      // IMPORTANT: Must capture rate BEFORE updating item.total_hours, otherwise derivation uses stale data
-      // 1. Try SCENARIO_A item's existing rate (authoritative)
-      // 2. Calculate rate from existing price/ORIGINAL hours if rate fields missing
-      // 3. Use cached lastKnownRate on item if available
-      // 4. Try pricingData with raw key, then sanitized key
-      // 5. Try DOM with raw key, then sanitized key
-      // 6. Fall back to 210 only if no valid rate found
-      let rate;
-      let scenarioItem;
-      if (window.SCENARIO_A && window.SCENARIO_A.items) {
-        scenarioItem = window.SCENARIO_A.items.find(i => 
-          (i.deliverable_code || i.Deliverable_Code || '').toUpperCase() === deliverableCode.toUpperCase()
-        );
-        if (scenarioItem) {
-          // Check all possible rate fields in priority order
-          const possibleRates = [
-            scenarioItem.effective_rate,
-            scenarioItem.blended_rate,
-            scenarioItem.rate_usd,
-            scenarioItem.Rate_USD,
-            scenarioItem.rate,
-            scenarioItem._lastKnownRate  // Cache for subsequent edits
-          ];
-          for (const r of possibleRates) {
-            if (r !== undefined && r !== null && r > 0) {
-              rate = r;
-              break;
-            }
-          }
-          // If no explicit rate, derive from ORIGINAL price and hours (before our edit mutates them)
-          // ONLY do this if we haven't updated the item yet (first edit in chain)
-          if ((rate === undefined || rate === 0) && scenarioItem.price > 0 && scenarioItem.total_hours > 0) {
-            // Only derive if this appears to be original data (price matches hours * some reasonable rate)
-            const impliedRate = scenarioItem.price / scenarioItem.total_hours;
-            if (impliedRate >= 50 && impliedRate <= 1000) {  // Sanity check - rates typically $50-$1000/hr
-              rate = impliedRate;
-              scenarioItem._lastKnownRate = rate;  // Cache for subsequent edits
-              console.log('[PRICING CASCADE] Derived rate from price/hours:', rate, 'and cached to _lastKnownRate');
-            }
-          }
-        }
-      }
-      if (rate === undefined || rate === 0) {
-        rate = window.pricingData?.customRates?.get(deliverableCode);
-      }
-      if (rate === undefined || rate === 0) {
-        rate = window.pricingData?.customRates?.get(safeDelivCode);
-      }
-      if (rate === undefined || rate === 0) {
-        let rateInput = document.getElementById(`rate-${deliverableCode}`);
-        if (!rateInput) {
-          rateInput = document.getElementById(`rate-${safeDelivCode}`);
-        }
-        const domRate = parseFloat(rateInput?.value);
-        if (!isNaN(domRate) && domRate > 0) {
-          rate = domRate;
-        }
-      }
-      // Final fallback - only use 210 if absolutely no rate found
-      if (rate === undefined || rate === null || isNaN(rate) || rate === 0) {
-        rate = 210;
-        console.log('[PRICING CASCADE] WARNING: Using fallback rate 210 for', deliverableCode);
-      }
-      console.log('[PRICING CASCADE] Rate for', deliverableCode, '=', rate);
+      // Calculate price = hours × rate
       const newPrice = Math.round(totalHours * rate * 100) / 100;
+      
+      console.log('[GPT 5.1 Pro] Rate:', rate, 'New price:', newPrice);
       
       // Update deliverable hours input in UI - try raw code first, then sanitized
       let delivHoursInput = document.getElementById(`hours-${deliverableCode}`);
@@ -2795,23 +2743,21 @@
         priceCell.textContent = '$' + newPrice.toLocaleString();
       }
       
-      // Update SCENARIO_A.items with new totals
-      if (window.SCENARIO_A && window.SCENARIO_A.items) {
-        const item = window.SCENARIO_A.items.find(i => 
-          (i.deliverable_code || i.Deliverable_Code || '').toUpperCase() === deliverableCode.toUpperCase()
-        );
-        if (item) {
-          console.log('[PRICING CASCADE] Updating SCENARIO_A item:', deliverableCode, 
-                      'hours:', item.total_hours, '->', totalHours,
-                      'price:', item.price, '->', newPrice);
-          item.total_hours = totalHours;
-          item.Planned_Hours = totalHours;
-          item.hours = totalHours;
-          item.price = newPrice;
-          item.Price_USD = newPrice;
-          item.price_usd = newPrice;
-        }
-      }
+      // Update SCENARIO_A item with new totals (item already found above)
+      // GPT 5.1 Pro: window.SCENARIO_A is the single source of truth for pricing
+      // ScenarioStore is NOT used for pricing sync - syncScenarioToBackend uses SCENARIO_A directly
+      console.log('[GPT 5.1 Pro] Updating SCENARIO_A item:', deliverableCode, 
+                  'hours:', item.total_hours, '->', totalHours,
+                  'price:', item.price, '->', newPrice);
+      item.total_hours = totalHours;
+      item.Planned_Hours = totalHours;
+      item.hours = totalHours;
+      item.price = newPrice;
+      item.Price_USD = newPrice;
+      item.price_usd = newPrice;
+      
+      // Set dirty flag to ensure sync happens on Update Pricing or export
+      window.pricingDetailsDirty = true;
       
       // Update summary totals in UI AND Step 3 table (unified refresh)
       // Use skipRender to avoid re-rendering Step 3 on every keystroke (performance)
@@ -2841,61 +2787,49 @@
           let row = scenarioTable.querySelector(`tr[data-deliverable="${deliverableCode}"]`);
           if (!row) {
             // Fallback: find by matching the first cell text (deliverable name)
-            const item = window.SCENARIO_A.items.find(i => 
-              (i.deliverable_code || i.Deliverable_Code || '').toUpperCase() === deliverableCode.toUpperCase()
-            );
-            if (item) {
-              const delivName = item.deliverable || item.deliverable_name || item.Deliverable_Name || '';
-              const rows = scenarioTable.querySelectorAll('tbody tr');
-              for (const r of rows) {
-                const firstCell = r.querySelector('td');
-                if (firstCell && firstCell.textContent.includes(delivName)) {
-                  row = r;
-                  break;
-                }
+            const delivName = item.deliverable || item.deliverable_name || item.Deliverable_Name || '';
+            const rows = scenarioTable.querySelectorAll('tbody tr');
+            for (const r of rows) {
+              const firstCell = r.querySelector('td');
+              if (firstCell && firstCell.textContent.includes(delivName)) {
+                row = r;
+                break;
               }
             }
           }
           if (row) {
-            // Find the item for this deliverable
-            const item = window.SCENARIO_A.items.find(i => 
-              (i.deliverable_code || i.Deliverable_Code || '').toUpperCase() === deliverableCode.toUpperCase()
-            );
-            if (item) {
-              // Update hours - BOTH display and input elements
-              const hoursCell = row.querySelector('.editable-hours');
-              if (hoursCell) {
-                const displaySpan = hoursCell.querySelector('.display-value');
-                const input = hoursCell.querySelector('.edit-input');
-                if (displaySpan) displaySpan.textContent = window.fmtInt(item.total_hours);
-                if (input) {
-                  input.value = item.total_hours;
-                  input.dataset.original = item.total_hours; // Update original value for blur handlers
-                }
-                hoursCell.dataset.original = item.total_hours;
+            // Update hours - BOTH display and input elements (using item from outer scope)
+            const hoursCell = row.querySelector('.editable-hours');
+            if (hoursCell) {
+              const displaySpan = hoursCell.querySelector('.display-value');
+              const input = hoursCell.querySelector('.edit-input');
+              if (displaySpan) displaySpan.textContent = window.fmtInt(item.total_hours);
+              if (input) {
+                input.value = item.total_hours;
+                input.dataset.original = item.total_hours;
               }
-              
-              // Update total price display (7th column is Total Price)
-              const priceCells = row.querySelectorAll('td');
-              if (priceCells.length >= 7) {
-                const totalPriceCell = priceCells[6];
-                if (totalPriceCell) totalPriceCell.textContent = window.fmtUSD0(item.price);
+              hoursCell.dataset.original = item.total_hours;
+            }
+            
+            // Update total price display (7th column is Total Price)
+            const priceCells = row.querySelectorAll('td');
+            if (priceCells.length >= 7) {
+              const totalPriceCell = priceCells[6];
+              if (totalPriceCell) totalPriceCell.textContent = window.fmtUSD0(item.price);
+            }
+            
+            // Also update the currentScenario_scenarioA if it exists (used by blur handlers)
+            if (window.currentScenario_scenarioA && window.currentScenario_scenarioA.items) {
+              const scenItem = window.currentScenario_scenarioA.items.find(i =>
+                (i.deliverable_code || i.deliverable || '').toUpperCase() === deliverableCode.toUpperCase()
+              );
+              if (scenItem) {
+                scenItem.total_hours = item.total_hours;
+                scenItem.price = item.price;
               }
-              
-              // Also update the currentScenario_scenarioA if it exists (used by blur handlers)
-              if (window.currentScenario_scenarioA && window.currentScenario_scenarioA.items) {
-                const scenItem = window.currentScenario_scenarioA.items.find(i =>
-                  (i.deliverable_code || i.deliverable || '').toUpperCase() === deliverableCode.toUpperCase()
-                );
-                if (scenItem) {
-                  scenItem.total_hours = item.total_hours;
-                  scenItem.price = item.price;
-                }
-                // Update totals too
-                if (window.currentScenario_scenarioA.totals) {
-                  window.currentScenario_scenarioA.totals.hours = totalHours;
-                  window.currentScenario_scenarioA.totals.price = totalPrice;
-                }
+              if (window.currentScenario_scenarioA.totals) {
+                window.currentScenario_scenarioA.totals.hours = totalHours;
+                window.currentScenario_scenarioA.totals.price = totalPrice;
               }
             }
           }
@@ -2996,19 +2930,83 @@
     window.recalculatePricingSummary = recalculatePricingSummary;
     
     // UNIFIED PRICING SYNC: refreshScenarioState() - Single function to sync all displays
-    // ARCHITECT FIX: Only recalculate from components if user has made edits (pricingDetailsDirty)
-    // Otherwise, use backend's authoritative totals to prevent 300→301 drift
+    // GPT 5.1 Pro: SCENARIO_A is authoritative. Component edits update component_hours map.
+    // Parent hours = exact sum of component_hours. This function syncs to backend.
     async function refreshScenarioState(options = {}) {
-      const { syncToBackend = true, skipRender = false, forceRecalc = false } = options;
+      const { syncToBackend = true, skipRender = false, forceSync = false } = options;
       
       if (!window.SCENARIO_A || !window.SCENARIO_A.items) {
         console.warn('[REFRESH] No SCENARIO_A to refresh');
         return;
       }
       
-      console.log('[REFRESH] Starting unified scenario state refresh...');
+      console.log('[GPT 5.1 Pro] Starting unified scenario state refresh...');
       
-      // Check if user has made edits - only recalculate if dirty or forced
+      // CRITICAL: DOM sweep - read ALL component hours from DOM to catch in-flight edits
+      // This ensures any typed values (even without blur) are captured in SCENARIO_A
+      // Iterate over all component input rows directly using data-parent attribute
+      const componentRows = document.querySelectorAll('tr[data-parent]');
+      const parentCodes = new Set();
+      
+      componentRows.forEach(row => {
+        const parentCode = row.dataset.parent;
+        if (parentCode) parentCodes.add(parentCode);
+        
+        // Find the hours input in this row and update SCENARIO_A directly
+        const hoursInput = row.querySelector('input[type="number"]');
+        if (!hoursInput) return;
+        
+        const compKey = hoursInput.dataset?.compkey;
+        if (!compKey) return;
+        
+        // Extract component name from compKey (format: "DELIVCODE::ComponentName")
+        const parts = compKey.split('::');
+        const componentName = parts.length > 1 ? parts[1] : compKey;
+        const currentValue = parseFloat(hoursInput.value) || 0;
+        
+        // Find matching item in SCENARIO_A
+        // Try multiple matching strategies: exact, uppercase, and sanitized
+        const sanitize = (s) => (s || '').replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
+        const parentUpper = parentCode.toUpperCase();
+        const parentSanitized = sanitize(parentCode);
+        
+        const item = window.SCENARIO_A.items.find(i => {
+          const itemCode = i.deliverable_code || i.Deliverable_Code || '';
+          const itemUpper = itemCode.toUpperCase();
+          const itemSanitized = sanitize(itemCode);
+          // Match by exact, uppercase, or sanitized
+          return itemCode === parentCode || 
+                 itemUpper === parentUpper || 
+                 itemSanitized === parentSanitized;
+        });
+        
+        if (item) {
+          if (!item.component_hours) item.component_hours = {};
+          item.component_hours[componentName] = currentValue;
+        }
+      });
+      
+      // Now recalculate totals for all parent deliverables with component_hours
+      window.SCENARIO_A.items.forEach(item => {
+        if (item.component_hours && Object.keys(item.component_hours).length > 0) {
+          const totalHours = Object.values(item.component_hours)
+            .reduce((sum, h) => sum + (Number(h) || 0), 0);
+          const rate = item.effective_rate || item.blended_rate || item.rate_usd || 
+                       item.Rate_USD || item.rate || 210;
+          const newPrice = Math.round(totalHours * rate * 100) / 100;
+          
+          item.total_hours = totalHours;
+          item.Planned_Hours = totalHours;
+          item.hours = totalHours;
+          item.price = newPrice;
+          item.Price_USD = newPrice;
+          item.price_usd = newPrice;
+        }
+      });
+      
+      console.log('[GPT 5.1 Pro] DOM sweep complete - synced', parentCodes.size, 'deliverables from', componentRows.length, 'component rows');
+      
+      // Check if user has made edits
       const hasPricingEdits = window.pricingDetailsDirty || 
                               (window.pricingData && window.pricingData.customHours && window.pricingData.customHours.size > 0) ||
                               (window.pricingData && window.pricingData.customRates && window.pricingData.customRates.size > 0);
@@ -3016,9 +3014,8 @@
       let totalHours = 0;
       let totalPrice = 0;
       
-      // DELTA-BASED PRICING: Always sum item.total_hours and item.price
-      // These are set by updateDeliverableTotalFromComponents() using delta logic
-      // So they correctly reflect backend total + user's delta
+      // GPT 5.1 Pro: Sum item.total_hours and item.price
+      // These are set by updateDeliverableTotalFromComponents() from component_hours map
       window.SCENARIO_A.items.forEach(item => {
         totalHours += (item.total_hours || 0);
         totalPrice += (item.price || 0);
@@ -3031,7 +3028,7 @@
       window.SCENARIO_A.totals.hours = totalHours;
       window.SCENARIO_A.totals.price = totalPrice;
       
-      console.log('[REFRESH] SCENARIO_A.totals:', { hours: totalHours, price: totalPrice });
+      console.log('[GPT 5.1 Pro] SCENARIO_A.totals:', { hours: totalHours, price: totalPrice });
       
       // 2. Re-render Step 3 table (Project Scenario) - ONLY if user has made edits
       // When no edits, the table already shows backend values
@@ -3083,18 +3080,21 @@
         targetTotals.innerHTML = `Totals — Hours: ${window.fmtInt ? window.fmtInt(totalHours) : Math.round(totalHours)}, Price: ${window.fmtUSD0 ? window.fmtUSD0(totalPrice) : '$' + Math.round(totalPrice).toLocaleString()}`;
       }
       
-      // 4. Sync to backend if requested - ONLY if user has made edits
-      // When no edits, backend already has authoritative data
-      if (syncToBackend && hasPricingEdits && typeof window.syncScenarioToBackend === 'function') {
-        try {
-          await window.syncScenarioToBackend(window.SCENARIO_A);
-          console.log('[REFRESH] Synced to backend (user edits detected)');
-        } catch (err) {
-          console.warn('[REFRESH] Backend sync failed:', err.message);
+      // 4. Sync to backend if requested
+      // GPT 5.1 Pro: window.SCENARIO_A is the single source of truth
+      // forceSync=true ALWAYS syncs (used by exports), otherwise sync if edits detected
+      if (syncToBackend && typeof window.syncScenarioToBackend === 'function') {
+        if (forceSync || hasPricingEdits) {
+          try {
+            await window.syncScenarioToBackend(window.SCENARIO_A);
+            console.log('[GPT 5.1 Pro] Synced to backend', forceSync ? '(FORCED)' : '(edits detected)');
+          } catch (err) {
+            console.warn('[GPT 5.1 Pro] Backend sync failed:', err.message);
+          }
         }
       }
       
-      console.log('[REFRESH] Unified scenario state refresh complete');
+      console.log('[GPT 5.1 Pro] Unified scenario state refresh complete');
     }
     window.refreshScenarioState = refreshScenarioState;
     
@@ -3304,10 +3304,10 @@
         }
         
         // 2) UNIFIED SYNC: Use refreshScenarioState to ensure all data is consistent
-        // This recalculates totals from components, updates SCENARIO_A, and syncs to backend
+        // GPT 5.1 Pro: Always sync before export using forceSync=true
         if (typeof window.refreshScenarioState === 'function') {
           console.log(`[Export] Running unified refreshScenarioState for Scenario ${letter}...`);
-          await window.refreshScenarioState({ syncToBackend: true, skipRender: true });
+          await window.refreshScenarioState({ syncToBackend: true, skipRender: true, forceSync: true });
           scen = window.SCENARIO_A; // Use refreshed scenario
         } else {
           // Fallback to old method if refreshScenarioState not available
