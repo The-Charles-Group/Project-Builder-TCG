@@ -2942,31 +2942,35 @@
       
       console.log('[GPT 5.1 Pro] Starting unified scenario state refresh...');
       
-      // CRITICAL: DOM sweep - read ALL component hours from DOM to catch in-flight edits
-      // This ensures any typed values (even without blur) are captured in SCENARIO_A
-      // Iterate over all component input rows directly using data-parent attribute
-      const componentRows = document.querySelectorAll('tr[data-parent]');
+      // CRITICAL: DOM sweep - read ALL component hours from pricing-details table
+      // This captures in-flight edits even without blur/Update Pricing
+      // The data-component attribute on each row has the full "DELIVCODE::ComponentName" key
+      const sanitize = (s) => (s || '').replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
+      
+      const componentRows = document.querySelectorAll('tr[data-component][data-parent]');
+      console.log('[DOM SWEEP] Found', componentRows.length, 'component rows in pricing table');
+      
       const parentCodes = new Set();
       
       componentRows.forEach(row => {
-        const parentCode = row.dataset.parent;
-        if (parentCode) parentCodes.add(parentCode);
+        const compKey = row.dataset.component; // Full key: "DELIVCODE::ComponentName"
+        const parentCode = row.dataset.parent;  // Parent code: "DELIVCODE"
         
-        // Find the hours input in this row and update SCENARIO_A directly
+        if (!compKey || !parentCode) return;
+        parentCodes.add(parentCode);
+        
+        // Extract component name from compKey
+        const parts = compKey.split('::');
+        const componentName = parts.length > 1 ? parts[1] : compKey;
+        
+        // Find the hours input in this row (first number input)
         const hoursInput = row.querySelector('input[type="number"]');
         if (!hoursInput) return;
         
-        const compKey = hoursInput.dataset?.compkey;
-        if (!compKey) return;
-        
-        // Extract component name from compKey (format: "DELIVCODE::ComponentName")
-        const parts = compKey.split('::');
-        const componentName = parts.length > 1 ? parts[1] : compKey;
         const currentValue = parseFloat(hoursInput.value) || 0;
+        console.log(`[DOM SWEEP] ${compKey}: ${currentValue}h from DOM input`);
         
-        // Find matching item in SCENARIO_A
-        // Try multiple matching strategies: exact, uppercase, and sanitized
-        const sanitize = (s) => (s || '').replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
+        // Find matching item in SCENARIO_A with multi-strategy matching
         const parentUpper = parentCode.toUpperCase();
         const parentSanitized = sanitize(parentCode);
         
@@ -2974,19 +2978,20 @@
           const itemCode = i.deliverable_code || i.Deliverable_Code || '';
           const itemUpper = itemCode.toUpperCase();
           const itemSanitized = sanitize(itemCode);
-          // Match by exact, uppercase, or sanitized
-          return itemCode === parentCode || 
-                 itemUpper === parentUpper || 
-                 itemSanitized === parentSanitized;
+          return itemCode === parentCode || itemUpper === parentUpper || itemSanitized === parentSanitized;
         });
         
         if (item) {
           if (!item.component_hours) item.component_hours = {};
           item.component_hours[componentName] = currentValue;
+          console.log(`[DOM SWEEP] Updated ${componentName} in item ${parentCode}`);
+        } else {
+          console.warn(`[DOM SWEEP] No matching item found for ${parentCode}`);
         }
       });
       
-      // Now recalculate totals for all parent deliverables with component_hours
+      // Recalculate parent deliverable totals from component_hours map
+      const updatedParents = new Set();
       window.SCENARIO_A.items.forEach(item => {
         if (item.component_hours && Object.keys(item.component_hours).length > 0) {
           const totalHours = Object.values(item.component_hours)
@@ -2994,6 +2999,11 @@
           const rate = item.effective_rate || item.blended_rate || item.rate_usd || 
                        item.Rate_USD || item.rate || 210;
           const newPrice = Math.round(totalHours * rate * 100) / 100;
+          
+          if (item.total_hours !== totalHours) {
+            console.log(`[DOM SWEEP] Recalc ${item.deliverable_code || item.Deliverable_Code}: ${item.total_hours}h → ${totalHours}h @ $${rate}`);
+            updatedParents.add(item.deliverable_code || item.Deliverable_Code);
+          }
           
           item.total_hours = totalHours;
           item.Planned_Hours = totalHours;
@@ -3004,7 +3014,7 @@
         }
       });
       
-      console.log('[GPT 5.1 Pro] DOM sweep complete - synced', parentCodes.size, 'deliverables from', componentRows.length, 'component rows');
+      console.log('[DOM SWEEP] Complete - synced', componentRows.length, 'components,', updatedParents.size, 'deliverables updated');
       
       // Check if user has made edits
       const hasPricingEdits = window.pricingDetailsDirty || 
