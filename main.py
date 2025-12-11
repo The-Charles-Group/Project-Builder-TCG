@@ -968,6 +968,7 @@ def _recompute_totals(scn: dict) -> dict:
     
     for item in items:
         hours = 0.0
+        has_component_hours = False
         
         # GPT 5.1 Pro: If component_hours exists, parent hours = exact sum
         component_hours = item.get("component_hours") or item.get("component_hours_override")
@@ -983,6 +984,7 @@ def _recompute_totals(scn: dict) -> dict:
             item["total_hours"] = hours
             item["hours"] = hours
             item["Planned_Hours"] = round(hours, 2)
+            has_component_hours = True
         else:
             # No component_hours - use existing hours value as-is (trust it)
             for key in ["total_hours", "hours", "Planned_Hours", "planned_hours"]:
@@ -1006,10 +1008,16 @@ def _recompute_totals(scn: dict) -> dict:
                 except (TypeError, ValueError):
                     continue
         
-        # Calculate price: use cadence price if set, otherwise hours × rate
-        if cadence_price is not None and cadence_price > 0:
+        # Calculate price: ALWAYS recalculate if component_hours exists (user edits)
+        # Otherwise use cadence price if set, or calculate from hours × rate
+        if has_component_hours:
+            # Component hours exist = user made edits, always recalculate from hours × rate
+            item_price = round(rate * hours, 2)
+        elif cadence_price is not None and cadence_price > 0:
+            # No component edits, use the cadence price as-is
             item_price = cadence_price
         else:
+            # Default: calculate from hours × rate
             item_price = round(rate * hours, 2)
         
         # Keep all price fields in sync
