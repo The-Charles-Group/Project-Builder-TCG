@@ -2264,13 +2264,9 @@
       }
       tbody.innerHTML = '';
       
-      // Counters for summary - using ORIGINAL prices for Grand Total
+      // Counters for summary - using CURRENT prices for consistency across all displays
       let oneTimeCount = 0, oneTimeHours = 0, oneTimeCost = 0;
       let retainerCount = 0, retainerMonthlyHours = 0, retainerMonthlyCost = 0;
-      
-      // For Grand Total, use original prices if available, otherwise use current prices
-      let oneTimeCostOriginal = 0;
-      let retainerMonthlyCostOriginal = 0;
       
       // Process each deliverable
       scenario.items.forEach((item, idx) => {
@@ -2436,20 +2432,15 @@
           });
         }
         
-        // Update summary counters - CRITICAL: Use recalculated hours/cost, not stale item values
+        // Update summary counters - CRITICAL: Use recalculated hours/cost from component sum
         if (isRetainer) {
           retainerCount++;
           retainerMonthlyHours += item.monthly_hours || 0;
           retainerMonthlyCost += item.monthly_price || 0;
-          // Use original price if available for Grand Total calculation
-          retainerMonthlyCostOriginal += item.original_monthly_price || item.monthly_price || 0;
         } else {
           oneTimeCount++;
-          // Use the recalculated hours and cost from component sum (defined above)
           oneTimeHours += hours;
           oneTimeCost += cost;
-          // For original prices, prefer stored original but fall back to recalculated
-          oneTimeCostOriginal += item.original_price || cost;
         }
       });
       
@@ -2465,20 +2456,23 @@
       const annualRetainerCost = retainerMonthlyCost * 12;
       document.getElementById('retainer-annual-cost').textContent = `$${annualRetainerCost.toLocaleString()}`;
       
-      // Calculate and display grand total - ALWAYS use original prices if available
-      const annualRetainerCostOriginal = retainerMonthlyCostOriginal * 12;
-      const grandTotal = oneTimeCostOriginal + annualRetainerCostOriginal;
+      // Calculate and display grand total - use CURRENT prices (not original) for consistency
+      const annualRetainerCostCurrent = retainerMonthlyCost * 12;
+      const grandTotal = oneTimeCost + annualRetainerCostCurrent;
       
-      // Update the Grand Total display (FIX: use correct element ID)
+      // Update the Grand Total display
       const grandTotalEl = document.getElementById('grand-total-cost');
       if (grandTotalEl) {
-        grandTotalEl.textContent = `$${grandTotal.toLocaleString()}`;
+        grandTotalEl.textContent = `$${Math.round(grandTotal).toLocaleString()}`;
       }
       
-      // Update the breakdown text below Grand Total
+      // Update the breakdown text below Grand Total with actual values
       const breakdownEl = document.getElementById('grand-total-breakdown');
       if (breakdownEl) {
-        breakdownEl.textContent = `One-time + 12 months retainer`;
+        const parts = [];
+        if (oneTimeCost > 0) parts.push(`One-time: $${Math.round(oneTimeCost).toLocaleString()}`);
+        if (annualRetainerCostCurrent > 0) parts.push(`Retainer (12 mo): $${Math.round(annualRetainerCostCurrent).toLocaleString()}`);
+        breakdownEl.textContent = parts.length > 0 ? parts.join(' + ') : 'No deliverables';
       }
       
       // Legacy grand total display (fallback for older UI)
@@ -2494,7 +2488,7 @@
         `;
       }
       
-      console.log('[GRAND TOTAL] Updated:', { oneTimeCost: oneTimeCostOriginal, annualRetainer: annualRetainerCostOriginal, grandTotal });
+      console.log('[GRAND TOTAL] Updated:', { oneTimeCost: oneTimeCost, annualRetainer: annualRetainerCostCurrent, grandTotal });
       
       console.log('[PRICING] Display updated successfully');
     }
