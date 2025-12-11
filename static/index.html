@@ -2305,7 +2305,15 @@
         hours = Math.round(hours);
         
         const rate = Math.round(item.effective_rate || item.blended_rate || scenario.blended_rate || 0);
-        const cost = item.price || 0;
+        // CRITICAL FIX: Recalculate cost from hours × rate when component sum differs from stored total
+        // This ensures the displayed cost matches the displayed hours
+        let cost;
+        if (hasComponents) {
+          // For componentized items, recalculate from the actual component hours sum
+          cost = hours * rate;
+        } else {
+          cost = item.price || 0;
+        }
         
         const delivRow = document.createElement('tr');
         delivRow.style.cssText = 'border-bottom: 1px solid var(--border);';
@@ -2428,7 +2436,7 @@
           });
         }
         
-        // Update summary counters
+        // Update summary counters - CRITICAL: Use recalculated hours/cost, not stale item values
         if (isRetainer) {
           retainerCount++;
           retainerMonthlyHours += item.monthly_hours || 0;
@@ -2437,10 +2445,11 @@
           retainerMonthlyCostOriginal += item.original_monthly_price || item.monthly_price || 0;
         } else {
           oneTimeCount++;
-          oneTimeHours += item.total_hours || 0;
-          oneTimeCost += item.price || 0;
-          // Use original price if available for Grand Total calculation
-          oneTimeCostOriginal += item.original_price || item.price || 0;
+          // Use the recalculated hours and cost from component sum (defined above)
+          oneTimeHours += hours;
+          oneTimeCost += cost;
+          // For original prices, prefer stored original but fall back to recalculated
+          oneTimeCostOriginal += item.original_price || cost;
         }
       });
       
@@ -2785,7 +2794,8 @@
       if (!window.SCENARIO_A || !window.SCENARIO_A.items) return;
       
       let oneTimeHours = 0, oneTimeCost = 0, oneTimeCount = 0;
-      let retainerHours = 0, retainerCost = 0, retainerCount = 0;
+      let retainerMonthlyHours = 0, retainerMonthlyCost = 0, retainerCount = 0;
+      let retainerAnnualCost = 0;
       
       window.SCENARIO_A.items.forEach(item => {
         const isRetainer = item.is_retainer || item.retainer;
@@ -2794,8 +2804,32 @@
         
         if (isRetainer) {
           retainerCount++;
-          retainerHours += hours;
-          retainerCost += price;
+          
+          // Check if monthly values are already available (already normalized)
+          if (item.monthly_hours !== undefined && item.monthly_hours > 0) {
+            // monthly_hours/monthly_price are authoritative - use directly
+            retainerMonthlyHours += item.monthly_hours;
+            retainerMonthlyCost += item.monthly_price || 0;
+            retainerAnnualCost += (item.monthly_price || 0) * 12;
+          } else {
+            // Derive monthly from total values based on cadence
+            const cadence = item.billing_cadence || 'monthly';
+            const periods = item.cadence_units || item.retainer_months || 12;
+            
+            // Determine months per period for cadence type
+            let monthsPerPeriod = 1; // default: monthly
+            if (cadence === 'Quarterly' || cadence === 'quarterly') monthsPerPeriod = 3;
+            else if (cadence === 'Semi-Annual' || cadence === 'semi_annual') monthsPerPeriod = 6;
+            else if (cadence === 'Annual' || cadence === 'annual') monthsPerPeriod = 12;
+            
+            const totalMonths = periods * monthsPerPeriod;
+            const monthlyHours = totalMonths > 0 ? hours / totalMonths : hours;
+            const monthlyPrice = totalMonths > 0 ? price / totalMonths : price;
+            
+            retainerMonthlyHours += monthlyHours;
+            retainerMonthlyCost += monthlyPrice;
+            retainerAnnualCost += monthlyPrice * 12;
+          }
         } else {
           oneTimeCount++;
           oneTimeHours += hours;
@@ -2803,20 +2837,40 @@
         }
       });
       
-      // Update UI
+      // Update One-Time UI
       const oneTimeCountEl = document.getElementById('one-time-count');
       const oneTimeHoursEl = document.getElementById('one-time-hours');
       const oneTimeCostEl = document.getElementById('one-time-cost');
-      const grandTotalEl = document.getElementById('grand-total-cost');
       
       if (oneTimeCountEl) oneTimeCountEl.textContent = oneTimeCount;
       if (oneTimeHoursEl) oneTimeHoursEl.textContent = oneTimeHours.toFixed(1);
-      if (oneTimeCostEl) oneTimeCostEl.textContent = '$' + oneTimeCost.toLocaleString();
+      if (oneTimeCostEl) oneTimeCostEl.textContent = '$' + Math.round(oneTimeCost).toLocaleString();
       
-      const grandTotal = oneTimeCost + (retainerCost * 12);
-      if (grandTotalEl) grandTotalEl.textContent = '$' + grandTotal.toLocaleString();
+      // Update Retainer UI - FIX: These elements were not being updated before
+      const retainerCountEl = document.getElementById('retainer-count');
+      const retainerMonthlyHoursEl = document.getElementById('retainer-monthly-hours');
+      const retainerMonthlyCostEl = document.getElementById('retainer-monthly-cost');
+      const retainerAnnualCostEl = document.getElementById('retainer-annual-cost');
       
-      console.log('[PRICING CASCADE] Summary updated - Hours:', oneTimeHours, 'Cost:', oneTimeCost, 'Grand:', grandTotal);
+      if (retainerCountEl) retainerCountEl.textContent = retainerCount;
+      if (retainerMonthlyHoursEl) retainerMonthlyHoursEl.textContent = retainerMonthlyHours.toFixed(1);
+      if (retainerMonthlyCostEl) retainerMonthlyCostEl.textContent = '$' + Math.round(retainerMonthlyCost).toLocaleString();
+      if (retainerAnnualCostEl) retainerAnnualCostEl.textContent = '$' + Math.round(retainerAnnualCost).toLocaleString();
+      
+      // Grand Total = One-Time + Annual Retainer (already annualized above)
+      const grandTotal = oneTimeCost + retainerAnnualCost;
+      const grandTotalEl = document.getElementById('grand-total-cost');
+      const grandBreakdownEl = document.getElementById('grand-total-breakdown');
+      
+      if (grandTotalEl) grandTotalEl.textContent = '$' + Math.round(grandTotal).toLocaleString();
+      if (grandBreakdownEl) {
+        const parts = [];
+        if (oneTimeCost > 0) parts.push(`One-time: $${Math.round(oneTimeCost).toLocaleString()}`);
+        if (retainerAnnualCost > 0) parts.push(`Retainer (12 mo): $${Math.round(retainerAnnualCost).toLocaleString()}`);
+        grandBreakdownEl.textContent = parts.length > 0 ? parts.join(' + ') : 'No deliverables';
+      }
+      
+      console.log('[PRICING CASCADE] Summary updated - OneTime:', oneTimeCost, 'RetainerAnnual:', retainerAnnualCost, 'Grand:', grandTotal);
     }
     window.recalculatePricingSummary = recalculatePricingSummary;
     
