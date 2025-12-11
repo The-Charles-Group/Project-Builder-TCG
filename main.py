@@ -1030,13 +1030,21 @@ def get_rate_from_item(item: dict) -> float:
 def get_hours_from_item(item: dict) -> float:
     """Get hours from item, checking multiple field name conventions.
     
-    CRITICAL: If component_hours exists, use the sum of component hours as authoritative.
-    This preserves Step 3 component-level edits through the sync/rebuild pipeline.
+    Priority: Standard hour fields FIRST (these are updated by frontend cascade),
+    then fall back to component_hours sum only if no standard fields exist.
+    This ensures the frontend's cascaded totals are respected.
     """
-    # First check: If component_hours exists, sum it (preserves component edits)
+    # Primary: check standard hour fields (updated by frontend cascade)
+    for key in ["Planned_Hours", "planned_hours", "hours", "total_hours"]:
+        if key in item and item[key] not in (None, ""):
+            try:
+                return float(item[key])
+            except (TypeError, ValueError):
+                continue
+    
+    # Fallback: If no standard fields, try component_hours sum
     component_hours = item.get("component_hours") or item.get("component_hours_override")
     if component_hours and isinstance(component_hours, dict) and len(component_hours) > 0:
-        # Sum valid numeric entries, skip invalid ones (don't abort on bad values)
         total = 0.0
         for v in component_hours.values():
             if v is None or v == "":
@@ -1044,19 +1052,10 @@ def get_hours_from_item(item: dict) -> float:
             try:
                 total += float(v)
             except (TypeError, ValueError):
-                continue  # Skip invalid entries, continue summing valid ones
-        
-        # Return the sum even if it's zero - zero is a valid explicit override
-        # Only fall through if component_hours was effectively empty/invalid
-        return total
-    
-    # Fallback: check standard hour fields (only when no component_hours)
-    for key in ["Planned_Hours", "planned_hours", "hours", "total_hours"]:
-        if key in item and item[key] not in (None, ""):
-            try:
-                return float(item[key])
-            except (TypeError, ValueError):
                 continue
+        if total > 0:
+            return total
+    
     return 0.0
 
 def set_hours_on_item(item: dict, hours: float):

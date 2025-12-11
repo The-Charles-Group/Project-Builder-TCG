@@ -3562,8 +3562,43 @@ function applyPricingEditToScenario(dcode, component, field, value) {
     return;
   }
   
-  // 1) Ensure we have a component_hours map per deliverable
+  // Ensure component_hours map exists
   item.component_hours = item.component_hours || {};
+  
+  // 1) CRITICAL FIX: Always hydrate ALL component hours from DOM on first edit
+  // This ensures the sum includes all siblings, not just the edited one
+  if (component && field === 'hours') {
+    const componentRows = document.querySelectorAll(`tr[data-parent="${dcode}"]`);
+    
+    // Always hydrate ALL components from DOM (not just missing ones)
+    // This ensures we have the complete picture regardless of stale state
+    componentRows.forEach(row => {
+      const compKey = row.getAttribute('data-component');
+      if (!compKey) return;
+      
+      const parts = compKey.split('::');
+      if (parts.length < 2) return;
+      const compName = parts.slice(1).join('::');
+      
+      // Skip the component we're about to edit (we'll set it below)
+      if (compName === component) return;
+      
+      // Read current DOM value for this sibling
+      const safeKey = compKey.replace(/[^a-zA-Z0-9]/g, '_');
+      const hoursInput = document.getElementById(`hours-${safeKey}`);
+      if (hoursInput) {
+        const domValue = parseFloat(hoursInput.value);
+        // Only update if valid number (preserve existing if DOM is invalid)
+        if (!isNaN(domValue)) {
+          item.component_hours[compName] = domValue;
+        }
+      }
+    });
+    
+    if (componentRows.length > 0) {
+      console.log('[PRICING] Hydrated', componentRows.length - 1, 'sibling components for', dcode);
+    }
+  }
   
   if (component) {
     // Editing a component row
@@ -3945,29 +3980,33 @@ function collectScenarioFromUi(scenario) {
       const code = item.deliverable_code || item.Deliverable_Code;
       const liveItem = liveItemsByCode[code];
       
-      if (liveItem && liveItem.component_hours && Object.keys(liveItem.component_hours).length > 0) {
-        // Copy component_hours map to collected item
-        item.component_hours = { ...liveItem.component_hours };
-        console.log(`[PRICING] Merged component_hours for ${code}:`, item.component_hours);
+      if (liveItem) {
+        // Copy component_hours map if present
+        if (liveItem.component_hours && Object.keys(liveItem.component_hours).length > 0) {
+          item.component_hours = { ...liveItem.component_hours };
+          console.log(`[PRICING] Merged component_hours for ${code}:`, item.component_hours);
+        }
         
-        // Recalculate parent hours from component_hours sum
-        const sum = Object.values(item.component_hours)
-          .map(v => Number(v) || 0)
-          .reduce((a, b) => a + b, 0);
-        
-        if (sum > 0) {
-          item.hours = sum;
-          item.total_hours = sum;
-          item.Planned_Hours = sum;
-          item.planned_hours = sum;
+        // CRITICAL FIX: Copy parent-level hours from liveItem (set by updateDeliverableTotalFromComponents)
+        // These are already correct sums from DOM. Do NOT recalculate from sparse component_hours.
+        // Must check for undefined/null explicitly (0 is a valid value for zeroed deliverables)
+        const liveHours = liveItem.total_hours ?? liveItem.Planned_Hours ?? liveItem.hours;
+        if (liveHours !== undefined && liveHours !== null) {
+          item.hours = liveHours;
+          item.total_hours = liveHours;
+          item.Planned_Hours = liveHours;
+          item.planned_hours = liveHours;
           
-          // Recalculate price
-          const rate = item.blended_rate || item.Rate_USD || 210;
-          item.price = sum * rate;
-          item.Price_USD = sum * rate;
-          item.price_usd = sum * rate;
+          // Copy price directly from liveItem (also set by cascade)
+          // Use nullish coalescing to preserve explicit $0 prices
+          const livePrice = liveItem.price ?? liveItem.Price_USD ?? liveItem.price_usd;
+          if (livePrice !== undefined && livePrice !== null) {
+            item.price = livePrice;
+            item.Price_USD = livePrice;
+            item.price_usd = livePrice;
+          }
           
-          console.log(`[PRICING] Updated ${code} from component_hours: ${sum}h @ $${rate} = $${sum * rate}`);
+          console.log(`[PRICING] Copied parent hours from live: ${code} = ${liveHours}h / $${livePrice}`);
         }
       }
       
