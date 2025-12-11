@@ -2279,7 +2279,31 @@
         // Main deliverable row with inline editing
         const delivCode = item.deliverable_code || item.code || '';
         const delivName = (item.deliverable || item.deliverable_name || 'Unknown').replace(/'/g, "\\'");
-        const hours = Math.round(item.total_hours || 0);
+        
+        // CRITICAL FIX: Calculate hours from component sum when components exist
+        // This prevents the initial render from showing stale deliverable-level hours (300h vs 305h)
+        let hours;
+        const hasComponents = item.components && item.components.length > 0;
+        if (hasComponents) {
+          // Calculate sum from components using priority chain
+          hours = item.components.reduce((sum, comp) => {
+            let compHours;
+            const compKey = `${delivCode}::${comp.name || comp.component}`;
+            // Priority: pricingData override > item.component_hours > component fields
+            if (window.pricingData && window.pricingData.customHours && window.pricingData.customHours.has(compKey)) {
+              compHours = window.pricingData.customHours.get(compKey);
+            } else if (item.component_hours && item.component_hours[comp.name || comp.component] !== undefined) {
+              compHours = item.component_hours[comp.name || comp.component];
+            } else {
+              compHours = comp.hours ?? comp.total_hours ?? comp.Planned_Hours ?? comp.planned_hours ?? 0;
+            }
+            return sum + (parseFloat(compHours) || 0);
+          }, 0);
+        } else {
+          hours = item.total_hours || 0;
+        }
+        hours = Math.round(hours);
+        
         const rate = Math.round(item.effective_rate || item.blended_rate || scenario.blended_rate || 0);
         const cost = item.price || 0;
         
@@ -2300,11 +2324,18 @@
             </select>
           </td>
           <td style="padding: 8px; text-align: center;">
-            <input type="number" id="hours-${delivCode}" value="${hours}" min="0" step="1"
-                   onchange="updatePricingHours('${delivCode}', this.value)"
-                   style="width: 70px; padding: 4px 6px; border: 1px solid rgba(106,163,255,0.3); 
-                          border-radius: 4px; background: rgba(106,163,255,0.05); color: var(--text); 
-                          text-align: center; font-size: 0.9em;" />
+            ${hasComponents ? 
+              `<input type="number" id="hours-${delivCode}" value="${hours}" 
+                      readonly
+                      title="Total is sum of components. Edit individual components below."
+                      style="width: 70px; padding: 4px 6px; border: 1px solid rgba(106,163,255,0.2); 
+                             border-radius: 4px; background: rgba(106,163,255,0.02); color: var(--muted); 
+                             text-align: center; font-size: 0.9em; cursor: not-allowed;" />` :
+              `<input type="number" id="hours-${delivCode}" value="${hours}" min="0" step="1"
+                      onchange="updatePricingHours('${delivCode}', this.value)"
+                      style="width: 70px; padding: 4px 6px; border: 1px solid rgba(106,163,255,0.3); 
+                             border-radius: 4px; background: rgba(106,163,255,0.05); color: var(--text); 
+                             text-align: center; font-size: 0.9em;" />`}
           </td>
           <td style="padding: 8px; text-align: center;">
             <div style="display: flex; align-items: center; gap: 2px; justify-content: center;">
@@ -2330,7 +2361,17 @@
           item.components.forEach(comp => {
             const compName = (comp.name || comp.component || 'Component').replace(/'/g, "\\'");
             const compKey = `${delivCode}::${comp.name || comp.component}`;
-            const compHours = Math.round(comp.hours || 0);
+            
+            // CRITICAL FIX: Use priority chain for component hours (matches deliverable calculation)
+            let compHoursRaw;
+            if (window.pricingData && window.pricingData.customHours && window.pricingData.customHours.has(compKey)) {
+              compHoursRaw = window.pricingData.customHours.get(compKey);
+            } else if (item.component_hours && item.component_hours[comp.name || comp.component] !== undefined) {
+              compHoursRaw = item.component_hours[comp.name || comp.component];
+            } else {
+              compHoursRaw = comp.hours ?? comp.total_hours ?? comp.Planned_Hours ?? comp.planned_hours ?? 0;
+            }
+            const compHours = Math.round(parseFloat(compHoursRaw) || 0);
             const compRate = Math.round(comp.rate || rate);
             const compCost = compHours * compRate;
             
