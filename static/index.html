@@ -3381,8 +3381,11 @@
       let scen = window.getScenario(letter);
       if (!scen) { alert(`Build Scenario ${letter} first.`); return; }
 
-      // Get session_id to access Gantt-edited timeline data from SCENARIO_STORE
-      const sessionId = window.SessionManager ? window.SessionManager.getCurrentSessionId() : null;
+      // Get session_id from ScenarioManager (preferred) or SessionManager or localStorage
+      // CRITICAL: Match the fallback logic from onExportScenario to ensure pricing edits are captured
+      const sessionId = window.ScenarioManager?.state?.sessionId || 
+                        window.SessionManager?.getCurrentSessionId?.() ||
+                        localStorage.getItem('apb.currentSession');
       
       // GPT 5.1 Pro: COMPLETE FIX - sync and collect from UI before export
       await ensureScenarioSyncedBeforeExport(scen, letter);
