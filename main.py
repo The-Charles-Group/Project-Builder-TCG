@@ -10737,9 +10737,21 @@ def api_export_xml_scenario_a(add_anchors: bool = False, session_id: Optional[st
     If session_id is provided, uses SCENARIO_STORE (includes Gantt edits).
     Otherwise uses _CURRENT_SCENARIOS (pricing-only data).
     """
+    print(f"[XML EXPORT GET /a] session_id={session_id}")
     scenarios = _get_scenarios(session_id)
     if "A" not in scenarios:
         raise HTTPException(400, "Scenario A not found. Please build scenarios first.")
+    
+    # Log component_hours status for debugging
+    scenario_a = scenarios["A"]
+    for item in scenario_a.get("items", []):
+        code = item.get("deliverable_code") or item.get("code") or item.get("id")
+        ch = item.get("component_hours")
+        if ch:
+            ch_sum = sum(float(v) for v in ch.values() if v)
+            print(f"[XML EXPORT GET /a] {code} has component_hours: sum={ch_sum}h, map={ch}")
+        else:
+            print(f"[XML EXPORT GET /a] {code} has NO component_hours")
     
     final_xml = _export_single_scenario_xml(
         scenario=scenarios["A"],
