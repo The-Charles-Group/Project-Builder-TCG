@@ -1361,7 +1361,14 @@ def merge_scenario_from_sync(session_id: str):
             continue
         
         old_item = old_items_by_id.get(item_id, {})
-        merged_items.append(_merge_items(old_item, new_item, editable_fields))
+        merged = _merge_items(old_item, new_item, editable_fields)
+        
+        # CRITICAL: Ensure component_hours is preserved if it exists in new_item
+        if "component_hours" in new_item and new_item["component_hours"]:
+            merged["component_hours"] = new_item["component_hours"]
+            print(f"[MERGE] Preserving component_hours for {item_id}: {new_item['component_hours']}")
+        
+        merged_items.append(merged)
     
     merged_scen["items"] = merged_items
     
@@ -4650,6 +4657,7 @@ def _get_scenarios(session_id: Optional[str] = None) -> dict:
         if items:
             first_item = items[0]
             print(f"[GET_SCENARIOS] First item: {first_item.get('Deliverable', first_item.get('deliverable', 'N/A'))}, hours={first_item.get('Planned_Hours', first_item.get('planned_hours', 'N/A'))}, price={first_item.get('price_usd', first_item.get('Price_USD', 'N/A'))}")
+            print(f"[GET_SCENARIOS] First item component_hours: {first_item.get('component_hours', 'NOT SET')}")
         
         # Call _recompute_totals to ensure all pricing fields are in sync before export
         scenario = _recompute_totals(scenario)
