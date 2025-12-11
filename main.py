@@ -10794,6 +10794,8 @@ def _export_single_scenario_xml(
         # Use the simple convert_excel_to_mspdi function defined in this file (line 9053)
         # This version produces clean XML matching the Nov 12 reference without bloat
         # FORCE add_deliverable_milestones=False to override any cached scenario settings
+        # TICKET: Pass compression_metadata for business-day durations (Workfront alignment)
+        timeline_metadata = scenario.get("timeline_metadata", {})
         stats = convert_excel_to_mspdi(
             input_xlsx=temp_xlsx,
             output_xml=output_xml,
@@ -10806,7 +10808,8 @@ def _export_single_scenario_xml(
             pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario.get("rate_band", "Standard_US"),
             blended_rate=scenario.get("blended_rate"),
-            add_deliverable_milestones=False  # WORKFRONT COMPAT: Always False (ignore parameter)
+            add_deliverable_milestones=False,  # WORKFRONT COMPAT: Always False (ignore parameter)
+            compression_metadata=timeline_metadata  # TICKET: Business-day durations for Workfront
         )
         
         # Post-process XML to parallelize identical task names (optional)
@@ -12029,7 +12032,8 @@ def convert_excel_to_mspdi(
     rate_band: str = "Standard_US",          # <— NEW: rate band
     blended_rate: Optional[float] = None,    # <— NEW: blended rate
     add_deliverable_milestones: bool = False, # <— NEW: toggle for START/END anchors
-    compressed_timeline: Optional[Dict[str, Any]] = None  # <— TASK 1: Compressed timeline for single source of truth
+    compressed_timeline: Optional[Dict[str, Any]] = None,  # <— TASK 1: Compressed timeline for single source of truth
+    compression_metadata: Optional[Dict[str, Any]] = None  # <— TICKET: Compression metadata for business-day durations
 ) -> Dict[str, int]:
     """
     Convert Excel WBS data to Microsoft Project XML (MSPDI) format with multi-resource merge capability.
@@ -13726,21 +13730,38 @@ def convert_excel_to_mspdi(
                 # LEGACY: SNET constraint + Manual* tags if has children
                 SubElement(task, "Work").text = "PT0M"
                 
-                # FIX: Calculate actual Duration from Start/Finish dates (not hardcoded PT480M)
-                # This fixes the mismatch where Step 4 shows 121 days but Workfront shows 1 day
-                try:
-                    start_str = uid_to_sched[r["UID"]]["Start"]
-                    finish_str = uid_to_sched[r["UID"]]["Finish"]
-                    start_dt = datetime.datetime.fromisoformat(start_str.replace('Z', ''))
-                    finish_dt = datetime.datetime.fromisoformat(finish_str.replace('Z', ''))
-                    duration_days = max(1, (finish_dt - start_dt).days)
-                    duration_minutes = duration_days * 480  # 8-hour workday
-                    SubElement(task, "Duration").text = f"PT{duration_minutes}M"
-                    print(f"[XML EXPORT] 📏 Deliverable Duration: {name_txt[:40]} = {duration_days} days (PT{duration_minutes}M)")
-                except Exception as e:
-                    # Fallback to 1 day
-                    SubElement(task, "Duration").text = "PT480M"
-                    print(f"[XML EXPORT] ⚠️ Duration fallback for {name_txt[:40]}: {e}")
+                # TICKET: Use business days from compression_metadata for Workfront alignment
+                # This ensures the Duration in XML matches what Workfront calculates (Mon-Fri)
+                duration_days = None
+                deliv_code = r.get("DeliverableCode", "")
+                
+                # Try to get business days from compression_metadata first
+                # Note: compression_map can be at top level OR nested under "compression" depending on source
+                if compression_metadata and deliv_code:
+                    comp_map = compression_metadata.get("compression_map", {}) or compression_metadata.get("compression", {}).get("compression_map", {})
+                    if comp_map and deliv_code in comp_map:
+                        biz_days = comp_map[deliv_code].get("duration_business_days")
+                        if biz_days and biz_days > 0:
+                            duration_days = biz_days
+                            print(f"[XML EXPORT] 📏 Deliverable Duration (business days): {name_txt[:40]} = {duration_days} days from compression_map")
+                
+                # Fallback: Calculate from Start/Finish dates (calendar days - legacy behavior)
+                if not duration_days or duration_days <= 0:
+                    try:
+                        start_str = uid_to_sched[r["UID"]]["Start"]
+                        finish_str = uid_to_sched[r["UID"]]["Finish"]
+                        start_dt = datetime.datetime.fromisoformat(start_str.replace('Z', ''))
+                        finish_dt = datetime.datetime.fromisoformat(finish_str.replace('Z', ''))
+                        duration_days = max(1, (finish_dt - start_dt).days)
+                        print(f"[XML EXPORT] 📏 Deliverable Duration (calendar fallback): {name_txt[:40]} = {duration_days} days")
+                    except Exception as e:
+                        duration_days = 1
+                        print(f"[XML EXPORT] ⚠️ Duration fallback for {name_txt[:40]}: {e}")
+                
+                # Ensure duration_days is always a valid positive integer
+                duration_days = max(1, int(duration_days or 1))
+                duration_minutes = duration_days * 480  # 8-hour workday
+                SubElement(task, "Duration").text = f"PT{duration_minutes}M"
                 
                 if TIGHT_WATERFALL_ENABLED:
                     # TIGHT WATERFALL MODE: ASAP for most, SNET for first (start gate)
@@ -15152,7 +15173,25 @@ async def save_timeline(request: dict):
             # Identify critical path (simplified - tasks with no slack)
             critical_path = [t["id"] for t in tasks if t.get("is_critical", False)]
         
-        # Update scenario items with timeline data
+        # TICKET: Extract compression_map for working-day durations (Workfront alignment)
+        # Note: compression_map can be at top level OR nested under "compression" depending on source
+        compression_map = metadata.get("compression_map", {}) or metadata.get("compression", {}).get("compression_map", {})
+        
+        # TICKET FIX: First, populate working_duration_days for ALL scenario items from compression_map
+        # This is independent of task-level data and uses deliverable codes directly
+        for item in scen.get("items", []):
+            item_code = item.get("deliverable_code")
+            if item_code and item_code in compression_map:
+                comp_info = compression_map[item_code]
+                item["timeline_working_duration_days"] = comp_info.get("duration_business_days", 0)
+                # Also update start/end from compression if not already set
+                if not item.get("timeline_start") and comp_info.get("new_start"):
+                    item["timeline_start"] = comp_info.get("new_start")
+                if not item.get("timeline_end") and comp_info.get("new_end"):
+                    item["timeline_end"] = comp_info.get("new_end")
+                print(f"[TIMELINE SAVE] {item_code}: Working duration = {item['timeline_working_duration_days']} days (Mon-Fri)")
+        
+        # Update scenario items with timeline data from individual tasks
         for task in tasks:
             deliverable_code = task.get("deliverable_code") or task.get("id", "").split("-")[0]
             
@@ -15173,10 +15212,23 @@ async def save_timeline(request: dict):
                             item["total_hours"] = calculated_hours
                             item["hours_updated_from_timeline"] = True
                     
-                    # Store timeline-specific data
-                    item["timeline_start"] = task.get("start")
-                    item["timeline_end"] = task.get("end")
+                    # Store timeline-specific data (prefer task-level data over compression defaults)
+                    if task.get("start"):
+                        item["timeline_start"] = task.get("start")
+                    if task.get("end"):
+                        item["timeline_end"] = task.get("end")
                     item["timeline_dependencies"] = task.get("dependencies", [])
+                    
+                    # TICKET: Calculate timeline_span_calendar_days from start/end
+                    if item.get("timeline_start") and item.get("timeline_end"):
+                        try:
+                            start_dt = datetime.datetime.fromisoformat(item["timeline_start"].replace("Z", "").replace("+00:00", ""))
+                            end_dt = datetime.datetime.fromisoformat(item["timeline_end"].replace("Z", "").replace("+00:00", ""))
+                            span_days = (end_dt - start_dt).days + 1  # Inclusive
+                            item["timeline_span_calendar_days"] = span_days
+                        except (ValueError, AttributeError):
+                            pass
+                    
                     break
         
         # Store the complete scenario with timeline data using proper dual-entry format
