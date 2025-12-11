@@ -50,6 +50,12 @@ Preferred communication style: Simple, everyday language.
   - Backend `merge_scenario_from_sync()`: editable_fields includes `component_hours`, `component_hours_override`
   - Backend `build_wbs_with_pricing()`: Checks `d.get("component_hours")` before DB lookup; uses overrides directly when present
   - Data flow: User edits component → `applyPricingEditToScenario` → `SCENARIO_A.items[].component_hours` → `collectScenarioFromUi` → `syncScenarioToBackend` → backend merge → `build_wbs_with_pricing` → export XML
+- **Component-Hours Preservation Guards (Dec 2025)**: Three-part protection ensuring component_hours survive the collect→sync→export pipeline without DOM overwrites:
+  - Part 2 Guard: When item has component_hours, ALWAYS uses component_hours sum instead of DOM value (removed previous `sum > 0` conditional)
+  - Part 3 Guard: Skips DOM hydration for component rows if parent deliverable has component_hours defined
+  - Part 4 Guard: Skips pricingData.customHours overwrite if item already has component_hours
+  - `ensureScenarioSyncedBeforeExport()`: Pre-export function that collects scenario from UI, syncs to backend via `/api/scenario/sync`, and clears dirty flags only on successful sync
+  - Dirty flag triad: `window.pricingDetailsDirty`, `window.pricingDirty`, `window.SCENARIO_DIRTY` all set by `applyPricingEditToScenario()` when component hours change
 - **Parallel Processing**: Utilizes OpenAI Vision API for parallel PDF image processing.
 - **Smart Image Analysis**: Two-tier image processing system with pre-filtering and deep analysis.
 - **Session Isolation System**: Complete data isolation between different RFPs using unique session IDs.
