@@ -10234,31 +10234,63 @@ def api_export_xml_post(payload: Union[ExportXMLPayload, dict]):
     - {"scenarios": {"A": {...}}, "project_name": "Project"}
     - {"session_id": "...", "project_name": "Project"}  # NEW: Read from SCENARIO_STORE
     """
-    # NEW: Check if session_id is provided to read from SCENARIO_STORE
-    if isinstance(payload, dict) and "session_id" in payload and "scenario" not in payload:
+    if isinstance(payload, dict):
         session_id = payload.get("session_id")
+        payload_scenario = payload.get("scenario")
         
-        # Use get_working_scenario to respect dual-entry architecture
-        scenario = get_working_scenario(session_id)
-        if not scenario or not scenario.get("items"):
-            raise HTTPException(404, f"Scenario not found for session {session_id}")
-        
-        # Recompute totals to ensure Step 3 edits have correct totals
-        scenario = _recompute_totals(scenario)
-        update_working_scenario(session_id, scenario)
-        print(f"[XML EXPORT] 📦 Using working scenario for session {session_id} (preserves Step 3 edits)")
-        
-        # Create new payload with scenario from store
-        payload_dict = {
-            "scenario": scenario,
-            "project_name": payload.get("project_name") or scenario.get("project_name", "Project"),
-            "scenario_label": payload.get("scenario_label", "A"),
-            "sheet_name": payload.get("sheet_name", "WBS Export"),
-            "start_date_mode": payload.get("start_date_mode", "today"),
-            "fixed_start_iso": payload.get("fixed_start_iso") or scenario.get("project_start"),
-            "hours_per_day": payload.get("hours_per_day", 8.0)
-        }
-        return api_export_xml(payload_dict)
+        # CRITICAL FIX: Always try to get component_hours from SCENARIO_STORE
+        # The payload scenario may have stale data; SCENARIO_STORE has synced edits
+        if session_id:
+            store_scenario = get_working_scenario(session_id)
+            
+            if store_scenario and store_scenario.get("items"):
+                # Build lookup of component_hours by deliverable code from SCENARIO_STORE
+                store_items_by_code = {}
+                for item in store_scenario.get("items", []):
+                    code = item.get("id") or item.get("Row_ID") or item.get("deliverable_code")
+                    if code:
+                        store_items_by_code[code] = item
+                
+                # If no payload scenario, use store scenario directly
+                if not payload_scenario:
+                    scenario = _recompute_totals(store_scenario)
+                    update_working_scenario(session_id, scenario)
+                    print(f"[XML EXPORT] 📦 Using working scenario for session {session_id} (preserves Step 3 edits)")
+                    
+                    payload_dict = {
+                        "scenario": scenario,
+                        "project_name": payload.get("project_name") or scenario.get("project_name", "Project"),
+                        "scenario_label": payload.get("scenario_label", "A"),
+                        "sheet_name": payload.get("sheet_name", "WBS Export"),
+                        "start_date_mode": payload.get("start_date_mode", "today"),
+                        "fixed_start_iso": payload.get("fixed_start_iso") or scenario.get("project_start"),
+                        "hours_per_day": payload.get("hours_per_day", 8.0)
+                    }
+                    return api_export_xml(payload_dict)
+                else:
+                    # MERGE: Copy component_hours from SCENARIO_STORE into payload scenario
+                    merged_count = 0
+                    for item in payload_scenario.get("items", []):
+                        code = item.get("id") or item.get("Row_ID") or item.get("deliverable_code")
+                        if code and code in store_items_by_code:
+                            store_item = store_items_by_code[code]
+                            ch = store_item.get("component_hours")
+                            if ch and isinstance(ch, dict) and len(ch) > 0:
+                                item["component_hours"] = ch
+                                # Also update hours/price to match
+                                ch_sum = sum(float(v) for v in ch.values() if v)
+                                if ch_sum > 0:
+                                    item["total_hours"] = ch_sum
+                                    item["Planned_Hours"] = ch_sum
+                                    rate = float(item.get("effective_rate") or item.get("rate") or 210)
+                                    item["price"] = round(ch_sum * rate, 2)
+                                    item["price_usd"] = item["price"]
+                                    merged_count += 1
+                                    print(f"[XML EXPORT MERGE] {code}: component_hours={ch}, hours={ch_sum}, price={item['price']}")
+                    
+                    if merged_count > 0:
+                        print(f"[XML EXPORT] 🔀 Merged component_hours for {merged_count} items from SCENARIO_STORE")
+                        payload["scenario"] = payload_scenario
     
     # Delegate to the existing export_xml function
     return api_export_xml(payload)
