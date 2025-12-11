@@ -2799,8 +2799,33 @@
       
       window.SCENARIO_A.items.forEach(item => {
         const isRetainer = item.is_retainer || item.retainer;
-        const hours = item.total_hours || 0;
-        const price = item.price || 0;
+        const delivCode = item.deliverable_code || item.Deliverable_Code || '';
+        
+        // CRITICAL FIX: Calculate hours from component sum when components exist
+        // This matches the logic in updatePricingDisplay to ensure consistency
+        let hours;
+        const hasComponents = item.components && item.components.length > 0;
+        if (hasComponents) {
+          hours = item.components.reduce((sum, comp) => {
+            let compHours;
+            const compKey = `${delivCode}::${comp.name || comp.component}`;
+            // Priority: pricingData override > item.component_hours > component fields
+            if (window.pricingData && window.pricingData.customHours && window.pricingData.customHours.has(compKey)) {
+              compHours = window.pricingData.customHours.get(compKey);
+            } else if (item.component_hours && item.component_hours[comp.name || comp.component] !== undefined) {
+              compHours = item.component_hours[comp.name || comp.component];
+            } else {
+              compHours = comp.hours ?? comp.total_hours ?? comp.Planned_Hours ?? comp.planned_hours ?? 0;
+            }
+            return sum + (parseFloat(compHours) || 0);
+          }, 0);
+        } else {
+          hours = item.total_hours || 0;
+        }
+        
+        // Calculate price from hours × rate (consistent with display)
+        const rate = item.effective_rate || item.blended_rate || item.Rate_USD || 210;
+        const price = hasComponents ? hours * rate : (item.price || 0);
         
         if (isRetainer) {
           retainerCount++;
