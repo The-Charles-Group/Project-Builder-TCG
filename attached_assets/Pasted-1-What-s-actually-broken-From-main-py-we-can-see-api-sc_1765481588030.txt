@@ -1,0 +1,356 @@
+1. What’s actually broken
+
+From main.py we can see:
+
+/api/scenario/sync stores the client scenario into SCENARIO_SYNC_STATE[session_id]["scenario"] and then calls merge_scenario_from_sync(session_id) and _recompute_totals to update SCENARIO_STORE[session_id]["scenario"] – this is the canonical working scenario used by timeline + exports.
+
+build_wbs_with_pricing(...) does support component overrides via item["component_hours"]:
+
+It builds overrides = component_hours.get(dcode)
+
+If there are overrides and override_total = sum(overrides.values()) > 0, it sets
+parent_hours_display = int(round(override_total)) and uses those values as the base component hours map.
+
+Exports build the WBS and then emit XML tasks from that WBS.
+
+So if component_hours were actually getting into the server’s scenario, exports would change. The fact that Workfront + XML are still showing 300/32 means:
+
+Either component_hours is never actually being sent,
+
+Or merge_scenario_from_sync is not copying component_hours into SCENARIO_STORE,
+
+Or the export is reading from an older baseline scenario instead of the synced one.
+
+Separately, the “+1 hour turns 300 → 306” behavior can only come from front‑end math – the backend override path literally sets parent_hours_display = round(sum(component_hours.values())), so it would give 301 or 305, not 306.
+
+So we have two problems:
+
+Front‑end totals are wrong (they still use old scaling logic instead of “sum of component_hours”).
+
+Sync path is incomplete (component_hours never makes it into the scenario that exports read).
+
+2. Backend fixes in main.py
+
+These are the concrete changes to make in main.py.
+
+2.1. Make sure component_hours is merged from sync
+
+In main.py you already have merge_scenario_from_sync(session_id) and at the end it calls update_working_scenario(session_id, merged_scen). We need to make sure component_hours is an editable field and that it is carried over as‑is from the client.
+
+Inside merge_scenario_from_sync, ensure something like this exists:
+
+def merge_scenario_from_sync(session_id: str) -> None:
+    """Merge the synced client scenario into SCENARIO_STORE[session_id]["scenario"]"""
+
+    sync_entry = SCENARIO_SYNC_STATE.get(session_id)
+    if not sync_entry or not sync_entry.get("scenario"):
+        return
+
+    client_scen = sync_entry["scenario"] or {}
+    store_entry = SCENARIO_STORE.get(session_id, {})
+
+    # If we don't have a working scenario yet, just adopt the client one
+    if "scenario" not in store_entry or not store_entry["scenario"]:
+        update_working_scenario(session_id, client_scen)
+        return
+
+    server_scen = store_entry["scenario"] or {}
+
+    client_items = {i.get("deliverable_code") or i.get("id"): i
+                    for i in client_scen.get("items", [])}
+    server_items = {i.get("deliverable_code") or i.get("id"): i
+                    for i in server_scen.get("items", [])}
+
+    merged_items = []
+
+    # Fields that can be edited from Step 3
+    EDITABLE_FIELDS = {
+        "hours",
+        "rate",
+        "price_usd",
+        "cadence",
+        "n_periods",
+        "price_per_period",
+        "billing_cadence",
+        "component_hours",   # <<< IMPORTANT
+    }
+
+    for key, server_item in server_items.items():
+        client_item = client_items.get(key)
+        if not client_item:
+            merged_items.append(server_item)
+            continue
+
+        merged = dict(server_item)
+
+        for field in EDITABLE_FIELDS:
+            if field in client_item:
+                merged[field] = client_item[field]
+
+        merged_items.append(merged)
+
+    merged_scen = dict(server_scen)
+    merged_scen["items"] = merged_items
+
+    update_working_scenario(session_id, merged_scen)
+    print(f"[DEBUG] merge_scenario_from_sync merged: SCENARIO_STORE[{session_id}] keys:",
+          list(SCENARIO_STORE[session_id].keys()))
+
+
+Key point: component_hours must be copied straight from the synced scenario into the working scenario that the WBS / timeline / exports use.
+
+2.2. Keep _recompute_totals aligned with component overrides
+
+In _recompute_totals(scen) (the helper you call right after merge_scenario_from_sync), do not recalc hours from anything other than the item itself. For each item:
+
+def _recompute_totals(scenario: dict) -> dict:
+    items = scenario.get("items", [])
+    total_hours = 0.0
+    total_price = 0.0
+
+    for item in items:
+        # If component_hours exists, hours should already be the sum.
+        # Just read it – do NOT try to re-scale again.
+        hours = float(item.get("hours", 0) or 0)
+        price = float(item.get("price_usd", 0) or 0)
+        total_hours += hours
+        total_price += price
+
+    scenario.setdefault("totals", {})
+    scenario["totals"]["oneTimeHours"] = round(total_hours, 2)
+    scenario["totals"]["oneTimeCost"] = round(total_price, 2)
+    # ...plus whatever other totals you already track...
+    return scenario
+
+
+The important part is: _recompute_totals should not go back to DB or run any “hoursScale” or “largest remainder” logic. It just trusts the scenario (which may have component overrides).
+
+2.3. Ensure all exports use the working scenario
+
+In the export endpoints (/api/export/workfront_xml, /api/export/weekly_timeline, /api/export/monthly_timeline, etc.) make sure they are all pulling from the same source before calling build_wbs_with_pricing / timeline helpers:
+
+def get_working_scenario(session_id: str) -> dict:
+    entry = SCENARIO_STORE.get(session_id, {})
+    scen = entry.get("scenario")
+    if not scen:
+        # fall back to sync state if needed
+        sync = SCENARIO_SYNC_STATE.get(session_id, {})
+        scen = sync.get("scenario") or {}
+    return scen or {}
+
+
+Then in each export route:
+
+@app.post("/api/export/workfront_xml/{session_id}")
+async def export_workfront_xml(session_id: str):
+    scenario = get_working_scenario(session_id)
+    # IMPORTANT: scenario must now contain component_hours overrides
+    wbs_rows = build_wbs_with_pricing(scenario, session_id=session_id)
+    # ... existing MSPDI/XML building code ...
+
+
+If any export endpoint is still using an old baseline_scenario or rebuilding from the raw deliverable library, change it to use get_working_scenario(session_id) instead.
+
+3. Front‑end fixes (Step 3 JS)
+
+Here’s the behavior the front‑end needs. I’ll describe it in code‑ish terms so the Replit folks can translate into your existing JS.
+
+3.1. On Step 3 load
+
+When Step 3 loads (your initPricingStep()):
+
+async function initPricingStep() {
+  const sessionId = window.SESSION_ID;
+  const res = await fetch(`/api/scenario/${sessionId}`);
+  const data = await res.json();
+
+  window.SCENARIO_A = data.scenario;   // canonical copy
+  renderProjectScenario(window.SCENARIO_A);
+  renderPricingDetails(window.SCENARIO_A);
+  recalcPricingSummaryFromScenario(window.SCENARIO_A);
+}
+
+
+Both panels (Project Scenario + Deliverable Pricing Details) should be rendered from this same SCENARIO_A. No local recomputation from DB, no extra scaling.
+
+3.2. When a component hour is edited
+
+Hook your existing delegated input handler so that any edit in the Deliverable Pricing Details table does:
+
+function applyPricingEditToScenario(delivCode, componentCode, newHours) {
+  const scen = window.SCENARIO_A;
+  if (!scen || !Array.isArray(scen.items)) return;
+
+  const item = scen.items.find(it => it.deliverable_code === delivCode);
+  if (!item) return;
+
+  const value = Number(newHours) || 0;
+
+  if (!item.component_hours) {
+    item.component_hours = {};
+  }
+
+  item.component_hours[componentCode] = value;
+
+  // Recalculate deliverable hours as EXACT sum of component_hours
+  const totalHours = Object.values(item.component_hours)
+    .reduce((sum, h) => sum + (Number(h) || 0), 0);
+
+  item.hours = totalHours;
+
+  // Recalculate price from hours * rate
+  const rate = Number(item.rate) || 0;
+  item.price_usd = +(totalHours * rate).toFixed(2);
+
+  // Update UI immediately from this scenario
+  updateDeliverableRowInProjectScenario(item);
+  updateOneTimeTotalsFromScenario(scen);
+}
+
+
+Key rules:
+
+No scaling. Parent hours = sum of component_hours, always.
+
+Every time a component changes, item.component_hours is updated and item.hours is recomputed from that map.
+
+3.3. Update Pricing button
+
+Your new Update Pricing button should only:
+
+Push SCENARIO_A to the backend,
+
+Pull the server’s canonical scenario back,
+
+Re‑render both panels.
+
+Example:
+
+async function syncScenarioToBackend() {
+  const sessionId = window.SESSION_ID;
+  const scenario = window.SCENARIO_A;
+
+  const payload = {
+    sessionId,
+    scenario,
+    clientVersion: window.SCENARIO_CLIENT_VERSION || 0,
+    lastServerVersion: window.SCENARIO_SERVER_VERSION || 0,
+    selections: window.SCENARIO_SELECTIONS || {},
+    timestamp: Date.now(),
+    checksum: "" // or keep whatever you had
+  };
+
+  const res = await fetch(`/api/scenario/sync/${sessionId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await res.json();
+
+  if (data.hasChanges && data.scenario) {
+    window.SCENARIO_A = data.scenario;
+    window.SCENARIO_SERVER_VERSION = data.serverVersion;
+  }
+}
+
+async function onUpdatePricingClick() {
+  await syncScenarioToBackend();
+  // Always re-render from the server‑authoritative scenario
+  const scen = window.SCENARIO_A;
+  renderProjectScenario(scen);
+  renderPricingDetails(scen);
+  recalcPricingSummaryFromScenario(scen);
+}
+
+3.4. Build Scenario button on Step 3
+
+To avoid Step 3 suddenly “resetting” user edits:
+
+Use Build Scenario only once when you arrive from Step 2 to seed the working scenario.
+
+After that, either:
+
+Disable it, or
+
+Make it explicitly “Rebuild from Step 2 (resets all pricing)” and show a confirm dialog.
+
+But it should not be part of the normal “save pricing” flow. Your normal save path should be:
+
+edit components → click Update Pricing → backend sync → Step 3 & Step 4 & exports all agree.
+
+3.5. Step 4 and exports must go through the same scenario
+
+Before any export or Gantt generation, the UI should make sure the backend has the latest scenario:
+
+async function ensureScenarioSyncedBeforeExport() {
+  // If you already synced right after the last edit, you can skip,
+  // but safest is to just call syncScenarioToBackend() here.
+  await syncScenarioToBackend();
+}
+
+
+Then in whatever handlers you have for:
+
+Generate AI Timeline (Step 4)
+
+Download Workfront XML
+
+Download Weekly / Monthly PDFs
+
+Download XLSX / CSV
+
+Call:
+
+await ensureScenarioSyncedBeforeExport();
+// then trigger the corresponding /api/export/... endpoint
+
+4. Regression test script (what you/they should run)
+
+Please have the Replit folks run this exact scenario and only say “done” when every number matches:
+
+Start a fresh session.
+
+Step 2 → Proceed to Pricing (Step 3).
+
+Build Scenario once from Step 2 (if needed).
+
+Step 3 initial state:
+
+Brand Identity Development = 300 hours, $63,000
+
+Components under it sum to 300h (e.g. 18+28+…+32 = 300).
+
+In Deliverable Pricing Details:
+
+Change Visual Elements/Comps from 32 → 33.
+
+Click Update Pricing.
+
+Verify on Step 3:
+
+All component hours show your new values (VE/Comps = 33).
+
+Brand Identity Development hours = sum of visible components (should be 301 or 305 depending on how many you changed, but it must be the exact sum, no mystery +5).
+
+One‑Time Deliverables “Total Hours” equals the sum of all deliverables (here, same as Brand Identity Development).
+
+Grand Total cost/hours match those One‑Time totals.
+
+Go to Step 4:
+
+Generate AI Timeline.
+
+Hover Brand Identity Development → tooltip Hours: [same number as Step 3].
+
+Export Workfront XML, import into Workfront:
+
+Task “Brand Identity Development” Planned Hours = same number as Step 3/4.
+
+Task “Visual Elements/Comps” Planned Hours = 33h.
+
+Export Weekly and Monthly PDFs:
+
+In the table/tooltip, Brand Identity Development shows the same hours.
+
+If any one of those is off, the canonical scenario is still not wired correctly, and they should debug by hitting the existing debug endpoint they mentioned (e.g. /api/debug/deliverable_hours/{session_id}/{deliverable_code}) right after Update Pricing and again right before export to see where the numbers diverge.

@@ -2042,6 +2042,18 @@
         window.SCENARIO_A = scenarios.A;
         console.log('[BUILD] Set window.SCENARIOS and window.SCENARIO_A:', window.SCENARIOS);
         
+        // DELTA-BASED PRICING: Clear cached baselines when scenario is rebuilt
+        // This ensures fresh baseline values are captured from new backend data
+        if (window.pricingData && window.pricingData.originalComponentHours) {
+          window.pricingData.originalComponentHours.clear();
+          console.log('[BUILD] Cleared originalComponentHours cache');
+        }
+        // Clear _backendOriginalHours from all items so new values are captured
+        scenarios.A.items.forEach(item => {
+          delete item._backendOriginalHours;
+        });
+        console.log('[BUILD] Cleared _backendOriginalHours caches');
+        
         // FIX #2: Save scenarios to localStorage for persistence between steps
         try {
           // Ensure session ID is preserved
@@ -2285,44 +2297,16 @@
         const delivCode = item.deliverable_code || item.code || '';
         const delivName = (item.deliverable || item.deliverable_name || 'Unknown').replace(/'/g, "\\'");
         
-        // ARCHITECT FIX: Use backend's authoritative totals unless user has made edits
-        // This prevents the 300→301 drift from fractional component hours
+        // TRUST BACKEND: Use backend's authoritative total_hours and price for display
+        // Delta-based edits will update these values correctly
         const hasComponents = item.components && item.components.length > 0;
-        const hasPricingEdits = window.pricingDetailsDirty || 
-                                (window.pricingData && window.pricingData.customHours && window.pricingData.customHours.size > 0) ||
-                                (window.pricingData && window.pricingData.customRates && window.pricingData.customRates.size > 0);
         
-        let hours;
-        if (hasPricingEdits && hasComponents) {
-          // USER HAS MADE EDITS - calculate from component sum to reflect their changes
-          hours = item.components.reduce((sum, comp) => {
-            let compHours;
-            const compKey = `${delivCode}::${comp.name || comp.component}`;
-            if (window.pricingData && window.pricingData.customHours && window.pricingData.customHours.has(compKey)) {
-              compHours = window.pricingData.customHours.get(compKey);
-            } else if (item.component_hours && item.component_hours[comp.name || comp.component] !== undefined) {
-              compHours = item.component_hours[comp.name || comp.component];
-            } else {
-              compHours = comp.hours ?? comp.total_hours ?? comp.Planned_Hours ?? comp.planned_hours ?? 0;
-            }
-            return sum + (parseFloat(compHours) || 0);
-          }, 0);
-        } else {
-          // NO USER EDITS - use backend's authoritative total_hours
-          hours = item.total_hours || 0;
-        }
+        // Use backend values directly (don't recalculate from components)
+        let hours = item.total_hours || 0;
         hours = Math.round(hours);
         
         const rate = Math.round(item.effective_rate || item.blended_rate || scenario.blended_rate || 0);
-        let cost;
-        if (hasPricingEdits && hasComponents) {
-          // USER HAS MADE EDITS - recalculate from component hours
-          cost = hours * rate;
-        } else {
-          // NO USER EDITS - use backend's authoritative price ONLY
-          // DO NOT fallback to hours×rate as this reintroduces mismatch
-          cost = item.price || 0;
-        }
+        const cost = item.price || (hours * rate);
         
         const delivRow = document.createElement('tr');
         delivRow.style.cssText = 'border-bottom: 1px solid var(--border);';
@@ -2418,6 +2402,8 @@
               </td>
               <td style="padding: 8px; text-align: center;">
                 <input type="number" id="hours-${safeCompKey}" 
+                       data-compkey="${compKey}"
+                       data-deliverable="${delivCode}"
                        value="${compHours}" min="0" step="1"
                        onchange="updateComponentPricingHours('${delivCode}', '${(comp.name || comp.component).replace(/'/g, "\\'")}', this.value)"
                        style="width: 60px; padding: 3px 5px; border: 1px solid rgba(139,92,246,0.3); 
@@ -2675,18 +2661,54 @@
     window.updateComponentPricingHours = updateComponentPricingHours;
     
     // Helper: Recalculate deliverable total from all component inputs and update everywhere
+    // ARCHITECT FIX: Use delta-based pricing - apply change from original to backend's authoritative total
+    // This prevents 300→306 drift caused by summing individually-rounded component hours
     function updateDeliverableTotalFromComponents(deliverableCode) {
       // Component inputs use sanitized IDs (underscores), deliverable inputs use raw code
       const safeDelivCode = deliverableCode.replace(/[^a-zA-Z0-9]/g, '_');
       const componentInputs = document.querySelectorAll(`input[id^="hours-${safeDelivCode}__"]`);
       
-      // Sum all component hours (preserve fractional hours)
-      let totalHours = 0;
+      // DELTA-BASED PRICING: Calculate total delta from edits and apply to backend total
+      // This ensures +1h edit = +1h change regardless of component rounding
+      let totalDelta = 0;
       componentInputs.forEach(input => {
-        totalHours += parseFloat(input.value) || 0;
+        const compKey = input.dataset.compkey;
+        if (!compKey) return;
+        
+        const currentValue = parseFloat(input.value) || 0;
+        // originalComponentHours stores the RENDERED value (Math.round'd) set at render time
+        const originalValue = window.pricingData?.originalComponentHours?.get(compKey);
+        
+        if (originalValue !== undefined) {
+          const delta = currentValue - originalValue;
+          totalDelta += delta;
+          if (delta !== 0) {
+            console.log('[PRICING CASCADE] Component', compKey, 'delta:', delta);
+          }
+        }
       });
       
-      console.log('[PRICING CASCADE] Deliverable', deliverableCode, 'new total from components:', totalHours);
+      // Get SCENARIO_A item to apply delta to backend total
+      let scenarioItem;
+      let backendTotalHours = 0;
+      if (window.SCENARIO_A && window.SCENARIO_A.items) {
+        scenarioItem = window.SCENARIO_A.items.find(i => 
+          (i.deliverable_code || i.Deliverable_Code || '').toUpperCase() === deliverableCode.toUpperCase()
+        );
+        if (scenarioItem) {
+          // Use cached original total if available, otherwise use current backend total
+          if (scenarioItem._backendOriginalHours === undefined) {
+            scenarioItem._backendOriginalHours = scenarioItem.total_hours || 0;
+          }
+          backendTotalHours = scenarioItem._backendOriginalHours;
+        }
+      }
+      
+      // Apply delta to backend's authoritative total
+      const totalHours = backendTotalHours + totalDelta;
+      
+      console.log('[PRICING CASCADE] Deliverable', deliverableCode, 
+                  'backend:', backendTotalHours, 'delta:', totalDelta, 'new total:', totalHours);
       
       // Get rate for price calculation - check all possible sources
       // IMPORTANT: Must capture rate BEFORE updating item.total_hours, otherwise derivation uses stale data
@@ -2883,7 +2905,8 @@
     window.updateDeliverableTotalFromComponents = updateDeliverableTotalFromComponents;
     
     // Recalculate One-Time / Retainer / Grand Total summaries
-    // ARCHITECT FIX: Trust backend totals unless user has made edits
+    // ARCHITECT FIX: Always use item.total_hours and item.price which are set by delta-based cascade
+    // This ensures +1h edit = +1h total change across all displays
     function recalculatePricingSummary() {
       if (!window.SCENARIO_A || !window.SCENARIO_A.items) return;
       
@@ -2891,66 +2914,14 @@
       let retainerMonthlyHours = 0, retainerMonthlyCost = 0, retainerCount = 0;
       let retainerAnnualCost = 0;
       
-      // Check if user has made edits
-      const hasPricingEdits = window.pricingDetailsDirty || 
-                              (window.pricingData && window.pricingData.customHours && window.pricingData.customHours.size > 0) ||
-                              (window.pricingData && window.pricingData.customRates && window.pricingData.customRates.size > 0);
-      
       window.SCENARIO_A.items.forEach(item => {
         const isRetainer = item.is_retainer || item.retainer;
-        const delivCode = item.deliverable_code || item.Deliverable_Code || '';
-        const hasComponents = item.components && item.components.length > 0;
         
-        // ARCHITECT FIX: Use backend's authoritative totals unless user has made edits
-        let hours;
-        let price;
-        const delivRate = item.effective_rate || item.blended_rate || item.Rate_USD || 210;
-        
-        if (hasPricingEdits && hasComponents) {
-          // USER HAS MADE EDITS - calculate from component sum
-          hours = item.components.reduce((sum, comp) => {
-            let compHours;
-            const compKey = `${delivCode}::${comp.name || comp.component}`;
-            if (window.pricingData && window.pricingData.customHours && window.pricingData.customHours.has(compKey)) {
-              compHours = window.pricingData.customHours.get(compKey);
-            } else if (item.component_hours && item.component_hours[comp.name || comp.component] !== undefined) {
-              compHours = item.component_hours[comp.name || comp.component];
-            } else {
-              compHours = comp.hours ?? comp.total_hours ?? comp.Planned_Hours ?? comp.planned_hours ?? 0;
-            }
-            return sum + (parseFloat(compHours) || 0);
-          }, 0);
-          
-          // Sum (hours × rate) per component to preserve rate overrides
-          price = item.components.reduce((sum, comp) => {
-            let compHours;
-            const compKey = `${delivCode}::${comp.name || comp.component}`;
-            
-            if (window.pricingData && window.pricingData.customHours && window.pricingData.customHours.has(compKey)) {
-              compHours = window.pricingData.customHours.get(compKey);
-            } else if (item.component_hours && item.component_hours[comp.name || comp.component] !== undefined) {
-              compHours = item.component_hours[comp.name || comp.component];
-            } else {
-              compHours = comp.hours ?? comp.total_hours ?? comp.Planned_Hours ?? comp.planned_hours ?? 0;
-            }
-            
-            let compRate;
-            if (window.pricingData && window.pricingData.customRates && window.pricingData.customRates.has(compKey)) {
-              compRate = window.pricingData.customRates.get(compKey);
-            } else if (comp.rate !== undefined) {
-              compRate = comp.rate;
-            } else {
-              compRate = delivRate;
-            }
-            
-            return sum + ((parseFloat(compHours) || 0) * (parseFloat(compRate) || delivRate));
-          }, 0);
-        } else {
-          // NO USER EDITS - use backend's authoritative totals ONLY
-          // DO NOT fallback to hours×rate as this reintroduces mismatch
-          hours = item.total_hours || 0;
-          price = item.price || 0;
-        }
+        // DELTA-BASED PRICING: Always use item.total_hours and item.price
+        // These are set by updateDeliverableTotalFromComponents() using delta logic
+        // So they correctly reflect backend total + user's delta
+        const hours = item.total_hours || 0;
+        const price = item.price || 0;
         
         if (isRetainer) {
           retainerCount++;
@@ -3045,90 +3016,20 @@
       let totalHours = 0;
       let totalPrice = 0;
       
-      if (!hasPricingEdits && !forceRecalc && window.SCENARIO_A.totals && window.SCENARIO_A.totals.hours !== undefined) {
-        // USE BACKEND'S AUTHORITATIVE TOTALS (no user edits)
-        // This prevents the 300→301 drift from fractional component hours
-        totalHours = window.SCENARIO_A.totals.hours;
-        totalPrice = window.SCENARIO_A.totals.price;
-        console.log('[REFRESH] Using backend authoritative totals (no user edits):', { hours: totalHours, price: totalPrice });
-      } else {
-        // USER HAS MADE EDITS - recalculate from components to reflect their changes
-        console.log('[REFRESH] Recalculating from components (user edits detected)');
-        
-        window.SCENARIO_A.items.forEach(item => {
-          const delivCode = item.deliverable_code || item.Deliverable_Code || '';
-          const hasComponents = item.components && item.components.length > 0;
-          
-          // Calculate hours from component sum when components exist
-          let hours;
-          if (hasComponents) {
-            hours = item.components.reduce((sum, comp) => {
-              let compHours;
-              const compKey = `${delivCode}::${comp.name || comp.component}`;
-              if (window.pricingData && window.pricingData.customHours && window.pricingData.customHours.has(compKey)) {
-                compHours = window.pricingData.customHours.get(compKey);
-              } else if (item.component_hours && item.component_hours[comp.name || comp.component] !== undefined) {
-                compHours = item.component_hours[comp.name || comp.component];
-              } else {
-                compHours = comp.hours ?? comp.total_hours ?? comp.Planned_Hours ?? comp.planned_hours ?? 0;
-              }
-              return sum + (parseFloat(compHours) || 0);
-            }, 0);
-          } else {
-            hours = item.total_hours || 0;
-          }
-          
-          // Calculate price: sum (hours × rate) per component to preserve rate overrides
-          let price;
-          const delivRate = item.effective_rate || item.blended_rate || item.Rate_USD || 210;
-          
-          if (hasComponents) {
-            price = item.components.reduce((sum, comp) => {
-              let compHours;
-              const compKey = `${delivCode}::${comp.name || comp.component}`;
-              
-              if (window.pricingData && window.pricingData.customHours && window.pricingData.customHours.has(compKey)) {
-                compHours = window.pricingData.customHours.get(compKey);
-              } else if (item.component_hours && item.component_hours[comp.name || comp.component] !== undefined) {
-                compHours = item.component_hours[comp.name || comp.component];
-              } else {
-                compHours = comp.hours ?? comp.total_hours ?? comp.Planned_Hours ?? comp.planned_hours ?? 0;
-              }
-              
-              let compRate;
-              if (window.pricingData && window.pricingData.customRates && window.pricingData.customRates.has(compKey)) {
-                compRate = window.pricingData.customRates.get(compKey);
-              } else if (comp.rate !== undefined) {
-                compRate = comp.rate;
-              } else {
-                compRate = delivRate;
-              }
-              
-              return sum + ((parseFloat(compHours) || 0) * (parseFloat(compRate) || delivRate));
-            }, 0);
-          } else {
-            price = hours * delivRate;
-          }
-          
-          // Update item with recalculated values
-          item.total_hours = hours;
-          item.hours = hours;
-          item.Planned_Hours = hours;
-          item.price = price;
-          item.Price_USD = price;
-          item.price_usd = price;
-          
-          totalHours += hours;
-          totalPrice += price;
-        });
-        
-        // Update SCENARIO_A.totals with recalculated values
-        if (!window.SCENARIO_A.totals) {
-          window.SCENARIO_A.totals = {};
-        }
-        window.SCENARIO_A.totals.hours = totalHours;
-        window.SCENARIO_A.totals.price = totalPrice;
+      // DELTA-BASED PRICING: Always sum item.total_hours and item.price
+      // These are set by updateDeliverableTotalFromComponents() using delta logic
+      // So they correctly reflect backend total + user's delta
+      window.SCENARIO_A.items.forEach(item => {
+        totalHours += (item.total_hours || 0);
+        totalPrice += (item.price || 0);
+      });
+      
+      // Update SCENARIO_A.totals
+      if (!window.SCENARIO_A.totals) {
+        window.SCENARIO_A.totals = {};
       }
+      window.SCENARIO_A.totals.hours = totalHours;
+      window.SCENARIO_A.totals.price = totalPrice;
       
       console.log('[REFRESH] SCENARIO_A.totals:', { hours: totalHours, price: totalPrice });
       
