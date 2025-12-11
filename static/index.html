@@ -2129,6 +2129,15 @@
           console.warn('[BUILD] rebuildPricingFromBackend not available, using local totals');
         }
         
+        // CRITICAL: Call refreshScenarioState to ensure all 5 displays show consistent values
+        // This fixes the 300 vs 301 mismatch where Pricing Details showed floats (301) 
+        // while Step 3 showed integer-truncated values (300)
+        console.log('[BUILD] Calling refreshScenarioState for unified pricing display...');
+        if (typeof window.refreshScenarioState === 'function') {
+          await window.refreshScenarioState({ syncToBackend: true, skipRender: false });
+          console.log('[BUILD] All pricing displays synchronized');
+        }
+        
         console.log('[BUILD] Build process completed successfully!');
         
       } catch (error) {
@@ -3051,6 +3060,44 @@
       
       // 3. Update all pricing summaries (One-Time, Retainers, Grand Total)
       recalculatePricingSummary();
+      
+      // 3b. Update Pricing Details table header row with recalculated values
+      // This ensures the header shows the same values as Step 3 (integer-truncated component sums)
+      window.SCENARIO_A.items.forEach(item => {
+        const delivCode = item.deliverable_code || item.Deliverable_Code || '';
+        const hours = Math.round(item.total_hours || 0);
+        const price = Math.round(item.price || 0);
+        
+        // Update the hours input in Pricing Details
+        const hoursInput = document.getElementById(`hours-${delivCode}`);
+        if (hoursInput) {
+          hoursInput.value = hours;
+        }
+        
+        // Update the price display in Pricing Details
+        const priceCell = document.getElementById(`price-period-${delivCode}`);
+        if (priceCell) {
+          priceCell.textContent = '$' + price.toLocaleString();
+        }
+      });
+      
+      // 3c. Update Step 3 totals line
+      const totalsDiv = document.querySelector('#scenarioA-totals-line') || 
+                        document.querySelector('.scenario-totals') ||
+                        document.querySelector('#step3 .scenario-totals-line');
+      // Also try finding by partial match
+      const step3TotalsMatch = document.evaluate(
+        "//div[contains(text(), 'Totals')]",
+        document.getElementById('step3') || document,
+        null,
+        XPathResult.FIRST_ORDERED_NODE_TYPE,
+        null
+      ).singleNodeValue;
+      
+      const targetTotals = totalsDiv || step3TotalsMatch;
+      if (targetTotals && targetTotals.textContent.includes('Totals')) {
+        targetTotals.innerHTML = `Totals — Hours: ${window.fmtInt ? window.fmtInt(totalHours) : Math.round(totalHours)}, Price: ${window.fmtUSD0 ? window.fmtUSD0(totalPrice) : '$' + Math.round(totalPrice).toLocaleString()}`;
+      }
       
       // 4. Sync to backend if requested
       if (syncToBackend && typeof window.syncScenarioToBackend === 'function') {
