@@ -12124,7 +12124,7 @@ def convert_excel_to_mspdi(
     start_date_mode: str = "next_monday",
     fixed_start_iso: Optional[str] = None,
     hours_per_day: float = 8.0,
-    calendar_blocks: List[Tuple[str, str]] = [("08:00:00","12:00:00"), ("13:00:00","17:00:00")],
+    calendar_blocks: List[Tuple[str, str]] = [("09:00:00","17:00:00")],  # WORKFRONT FIX: Single 09:00-17:00 block
     roles_split_rule: str = "even",
     role_weights: Optional[Dict[str, float]] = None,
     preserve_predecessors: str = "normalize",
@@ -13843,11 +13843,23 @@ def convert_excel_to_mspdi(
                 print(f"[TIGHT WATERFALL] 🎯 First L2 deliverable UID={first_l2_deliverable_uid} (WBS {l2_candidates[0]['wbs']}) will use SNET constraint")
 
         # Tasks
+        # WORKFRONT FIX: Filter to export only OutlineLevel ≤ 3 (Project, Deliverables, no Components)
         tasks_elem = SubElement(project, "Tasks")
-        for task_id, r in enumerate(rows, 1):
+        skipped_components = 0
+        task_id_counter = 0
+        for r in rows:
+            # Calculate outline level for depth filtering
+            outline_level = r["WBS"].count(".") + 1  # 1 for '1', 2 for '1.1', etc.
+            
+            # CRITICAL: Skip components (OutlineLevel > 3) per Workfront requirements
+            if outline_level > 3:
+                skipped_components += 1
+                continue
+            
+            task_id_counter += 1
             task = SubElement(tasks_elem, "Task")
             SubElement(task, "UID").text = str(r["UID"])
-            SubElement(task, "ID").text = str(task_id)
+            SubElement(task, "ID").text = str(task_id_counter)
             # Use "Project Summary" for root task, otherwise use the actual name
             is_root = r["WBS"] == "1"
             name_txt = "Project Summary" if is_root else r["Name"]
@@ -13861,8 +13873,6 @@ def convert_excel_to_mspdi(
             SubElement(task, "Start").text = uid_to_sched[r["UID"]]["Start"]
             SubElement(task, "Finish").text = uid_to_sched[r["UID"]]["Finish"]
             
-            # Calculate outline level EARLY (needed for deliverable detection)
-            outline_level = r["WBS"].count(".") + 1  # 1 for '1', 2 for '1.1', etc.
             SubElement(task, "OutlineLevel").text = str(outline_level)
             
             # GPT-5 PRO FIX: Make deliverable/summary mutually exclusive to prevent duplicate ConstraintType tags
@@ -13885,9 +13895,10 @@ def convert_excel_to_mspdi(
             # GPT-5 PRO FIX: Reordered branches to prevent overlap (root → deliverable → summary → leaf)
             if is_root:
                 # ROOT TASK (OutlineLevel=1): PT0M duration, no Manual* tags
+                # WORKFRONT FIX: ConstraintType=4 = Start No Earlier Than (SNET)
                 SubElement(task, "Work").text = "PT0M"
                 SubElement(task, "Duration").text = "PT0M"
-                SubElement(task, "ConstraintType").text = "4"  # Must Start On
+                SubElement(task, "ConstraintType").text = "4"  # Start No Earlier Than (SNET)
                 SubElement(task, "ConstraintDate").text = uid_to_sched[r["UID"]]["Start"]
                 # Root does NOT get Manual* tags or Type/IsEffortDriven per GPT-5 Pro spec
             
@@ -13939,41 +13950,37 @@ def convert_excel_to_mspdi(
                     SubElement(task, "IsEffortDriven").text = "0"
                     SubElement(task, "ManuallyScheduled").text = "0"  # Explicit auto-scheduling
                     
-                    # All deliverables get ConstraintType=5 (Start No Later Than) per requirement
-                    start_date_str = uid_to_sched[r["UID"]]["Start"]
-                    if isinstance(start_date_str, datetime.datetime):
-                        constraint_date = start_date_str.strftime("%Y-%m-%dT08:00:00")
-                    elif 'T' in str(start_date_str):
-                        date_part = str(start_date_str).split('T')[0]
-                        constraint_date = f"{date_part}T08:00:00"
+                    # WORKFRONT FIX: All deliverables get ConstraintType=5 (Finish No Later Than - FNLT)
+                    finish_date_str = uid_to_sched[r["UID"]]["Finish"]
+                    if isinstance(finish_date_str, datetime.datetime):
+                        constraint_date = finish_date_str.strftime("%Y-%m-%dT17:00:00")
+                    elif 'T' in str(finish_date_str):
+                        date_part = str(finish_date_str).split('T')[0]
+                        constraint_date = f"{date_part}T17:00:00"
                     else:
-                        constraint_date = f"{start_date_str}T08:00:00"
+                        constraint_date = f"{finish_date_str}T17:00:00"
                     
-                    SubElement(task, "ConstraintType").text = "5"  # Start No Later Than
+                    SubElement(task, "ConstraintType").text = "5"  # Finish No Later Than (FNLT)
                     SubElement(task, "ConstraintDate").text = constraint_date
-                    print(f"[TIGHT WATERFALL] 📋 Deliverable SNLT: {name_txt} (WBS {r['WBS']}, Start={constraint_date})")
+                    print(f"[WORKFRONT] 📋 Deliverable FNLT: {name_txt} (WBS {r['WBS']}, Finish={constraint_date})")
                 else:
-                    # LEGACY MODE: Manual Scheduling tags to lock parent timelines
+                    # LEGACY MODE: Auto-schedule with FNLT constraint (same as tight waterfall)
                     SubElement(task, "Type").text = "1"  # Fixed Duration
                     SubElement(task, "IsEffortDriven").text = "0"
-                    SubElement(task, "ManuallyScheduled").text = "1"
-                    SubElement(task, "ManualStart").text = "1"
-                    SubElement(task, "ManualFinish").text = "1"
-                    SubElement(task, "ManualDuration").text = "1"
-                    SubElement(task, "ManualWork").text = "1"
+                    SubElement(task, "ManuallyScheduled").text = "0"  # WORKFRONT FIX: Use auto-scheduling
                     
-                    # SNLT constraint to lock deliverable timeline
-                    start_date_str = uid_to_sched[r["UID"]]["Start"]
-                    if 'T' in start_date_str:
-                        date_part = start_date_str.split('T')[0]
-                        constraint_date = f"{date_part}T08:00:00"
+                    # WORKFRONT FIX: FNLT constraint (ConstraintType=5) - ALWAYS for all deliverables
+                    finish_date_str = uid_to_sched[r["UID"]]["Finish"]
+                    if 'T' in str(finish_date_str):
+                        date_part = str(finish_date_str).split('T')[0]
+                        constraint_date = f"{date_part}T17:00:00"
                     else:
-                        constraint_date = f"{start_date_str}T08:00:00"
+                        constraint_date = f"{finish_date_str}T17:00:00"
                     
-                    SubElement(task, "ConstraintType").text = "5"  # Start No Later Than
+                    SubElement(task, "ConstraintType").text = "5"  # Finish No Later Than (FNLT)
                     SubElement(task, "ConstraintDate").text = constraint_date
                     
-                    print(f"[XML EXPORT] 🔒 Applied SNLT constraint to deliverable: {name_txt} (WBS {r['WBS']}, Start={constraint_date})")
+                    print(f"[WORKFRONT] 🔒 Applied FNLT constraint to deliverable: {name_txt} (WBS {r['WBS']}, Finish={constraint_date})")
             
             elif is_summary and not is_root:
                 # NON-ROOT SUMMARY TASKS (OutlineLevel 3+): Calculate actual duration from Start/Finish
@@ -14046,19 +14053,21 @@ def convert_excel_to_mspdi(
                 
                 SubElement(task, "Work").text = f"PT{work_minutes}M"
                 
-                # DURATION FIX: Ensure Work ≤ Duration using ceil(hours/8) formula
-                # This fixes "11 hours in 0.12 days" issue by guaranteeing sufficient duration
-                work_hours = work_minutes / 60.0
-                
-                if work_hours == 0:
-                    # Milestone: zero duration
-                    dur_minutes = 0
-                else:
-                    # Regular task: required_days = max(1, ceil(hours / 8.0))
-                    # Uses 8-hour workday aligned with MinutesPerDay=480
-                    import math
-                    required_days = max(1, math.ceil(work_hours / 8.0))
-                    dur_minutes = required_days * 480
+                # WORKFRONT FIX: Duration = (Finish - Start) business days × 480 minutes
+                # This matches the calendar-based duration Workfront expects
+                try:
+                    biz_days_inclusive = calculate_business_days_between(start_dt.date(), finish_dt.date())
+                    duration_days = max(1, biz_days_inclusive - 1) if biz_days_inclusive > 1 else max(0, biz_days_inclusive)
+                    dur_minutes = duration_days * 480 if duration_days > 0 else 0
+                except Exception:
+                    # Fallback: use work-based calculation
+                    work_hours = work_minutes / 60.0
+                    if work_hours == 0:
+                        dur_minutes = 0
+                    else:
+                        import math
+                        required_days = max(1, math.ceil(work_hours / 8.0))
+                        dur_minutes = required_days * 480
                 
                 SubElement(task, "Duration").text = f"PT{dur_minutes}M"
                 
@@ -15098,12 +15107,17 @@ def convert_excel_to_mspdi(
         except Exception as e:
             print(f"[MSPDI Validation] Could not validate dates: {e}")
 
+        # Log skipped components
+        if skipped_components > 0:
+            print(f"[WORKFRONT] 🚫 Skipped {skipped_components} components (OutlineLevel > 3) per depth limit")
+        
         # ═══════════════════════════════════════════════════════════════════════════
         # WORKFRONT CLEANUP: Strip problematic elements for clean import
         # Per user requirements: No Resources, No Assignments, No FixedCost/CostType,
         # Snap times to 09:00/17:00, No constraints on summary tasks
+        # CRITICAL: Always run cleanup for Workfront compatibility (not conditional)
         # ═══════════════════════════════════════════════════════════════════════════
-        if add_deliverable_milestones:
+        if True:  # Always run Workfront cleanup
             print(f"\n[WORKFRONT CLEANUP] Applying cleanup rules for Workfront import...")
             cleanup_stats = {"resources_removed": 0, "assignments_removed": 0, "fixedcost_removed": 0, 
                             "times_snapped": 0, "summary_constraints_removed": 0}
@@ -15202,6 +15216,60 @@ def convert_excel_to_mspdi(
                 print(f"[WORKFRONT CLEANUP] 🔓 Removed constraints from {cleanup_stats['summary_constraints_removed']} summary tasks")
             
             print(f"[WORKFRONT CLEANUP] ✅ Cleanup complete: {cleanup_stats}")
+
+        # ═══════════════════════════════════════════════════════════════════════════
+        # WORKFRONT PRE-DOWNLOAD VALIDATION
+        # Check XML structure before export to prevent import failures
+        # ═══════════════════════════════════════════════════════════════════════════
+        print(f"\n[WORKFRONT VALIDATION] ═══════════════════════════════════════")
+        validation_errors = []
+        
+        # Validation 1: Check PredecessorLink count > 0
+        total_predecessor_links = 0
+        for task_elem in tasks_elem.findall("Task"):
+            pred_links = task_elem.findall("PredecessorLink")
+            total_predecessor_links += len(pred_links)
+        
+        if total_predecessor_links > 0:
+            print(f"[VALIDATION] ✅ PredecessorLink count: {total_predecessor_links} (PASS)")
+        else:
+            validation_errors.append(f"No PredecessorLinks found - schedule may not import correctly")
+            print(f"[VALIDATION] ⚠️ PredecessorLink count: 0 (WARNING - dependencies may be missing)")
+        
+        # Validation 2: Check no Summary=1 tasks have Duration=PT0M (except root)
+        summary_zero_duration_issues = []
+        for task_elem in tasks_elem.findall("Task"):
+            summary_elem = task_elem.find("Summary")
+            duration_elem = task_elem.find("Duration")
+            uid_elem = task_elem.find("UID")
+            name_elem = task_elem.find("Name")
+            
+            is_summary = summary_elem is not None and summary_elem.text == "1"
+            is_root = uid_elem is not None and uid_elem.text == "1"
+            is_zero_duration = duration_elem is not None and duration_elem.text == "PT0M"
+            
+            if is_summary and is_zero_duration and not is_root:
+                task_name = name_elem.text if name_elem is not None else "Unknown"
+                summary_zero_duration_issues.append(f"{task_name} (UID {uid_elem.text if uid_elem else 'N/A'})")
+        
+        if not summary_zero_duration_issues:
+            print(f"[VALIDATION] ✅ No summary tasks with Duration=PT0M (except root): PASS")
+        else:
+            print(f"[VALIDATION] ⚠️ Found {len(summary_zero_duration_issues)} summary tasks with Duration=PT0M:")
+            for issue in summary_zero_duration_issues[:5]:
+                print(f"    - {issue}")
+                validation_errors.append(f"Summary task with zero duration: {issue}")
+        
+        # Validation 3: Verify exported task count
+        exported_task_count = len(tasks_elem.findall("Task"))
+        print(f"[VALIDATION] 📊 Exported {exported_task_count} tasks (skipped {skipped_components} components)")
+        
+        if validation_errors:
+            print(f"[VALIDATION] ⚠️ {len(validation_errors)} validation warning(s) detected")
+        else:
+            print(f"[VALIDATION] ✅ All validation checks passed")
+        
+        print(f"[WORKFRONT VALIDATION] ═══════════════════════════════════════\n")
 
         # Write XML file with proper formatting and error handling
         xml_string = tostring(project, encoding='unicode')
