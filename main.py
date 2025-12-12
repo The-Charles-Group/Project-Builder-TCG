@@ -12886,22 +12886,37 @@ def convert_excel_to_mspdi(
             # Calculate stretch ratio
             stretch_ratio = target_span / original_span if original_span > 0 else 1.0
             
+            # TICKET B DEBUG: Log this stretch operation BEFORE recursion
+            print(f"[XML EXPORT] 📐 Starting stretch of {len(kids)} children: original {original_span/86400:.1f} days → target {target_span/86400:.1f} days (ratio={stretch_ratio:.2f})")
+            print(f"    [DEBUG] original_min={original_min.date()}, original_max={original_max.date()}, bound_start={bound_start.date()}, bound_finish={bound_finish.date()}")
+            
             for k in kids:
                 child_start = uid_to_sched[k]["Start"]
                 child_finish = uid_to_sched[k]["Finish"]
                 
-                # Calculate proportional position within stretched range
-                # offset_ratio = how far into the original span this child starts
-                offset_seconds = (child_start - original_min).total_seconds()
-                duration_seconds = (child_finish - child_start).total_seconds()
+                # TICKET B FIX: Scale both START and END offsets from original_min
+                # This ensures a child ending at original_max will end at bound_finish
+                start_offset_seconds = (child_start - original_min).total_seconds()
+                end_offset_seconds = (child_finish - original_min).total_seconds()
                 
-                # Scale offset and duration proportionally
-                new_offset_seconds = offset_seconds * stretch_ratio
-                new_duration_seconds = max(3600, duration_seconds * stretch_ratio)  # min 1 hour
+                # Scale both offsets proportionally
+                new_start_offset = start_offset_seconds * stretch_ratio
+                new_end_offset = end_offset_seconds * stretch_ratio
                 
                 # Calculate new start/finish based on bound_start
-                new_start = bound_start + datetime.timedelta(seconds=new_offset_seconds)
-                new_finish = new_start + datetime.timedelta(seconds=new_duration_seconds)
+                new_start = bound_start + datetime.timedelta(seconds=new_start_offset)
+                new_finish = bound_start + datetime.timedelta(seconds=new_end_offset)
+                
+                # Ensure minimum duration of 1 hour
+                if (new_finish - new_start).total_seconds() < 3600:
+                    new_finish = new_start + datetime.timedelta(hours=1)
+                
+                # Calculate new duration for logging
+                new_duration_seconds = (new_finish - new_start).total_seconds()
+                duration_seconds = (child_finish - child_start).total_seconds()
+                
+                # TICKET B DEBUG: Log each child's stretch calculation
+                print(f"  [STRETCH] UID {k}: {child_start.date()} - {child_finish.date()} ({duration_seconds/86400:.1f}d) → {new_start.date()} - {new_finish.date()} ({new_duration_seconds/86400:.1f}d)")
                 
                 # Clamp to bounds (just in case of floating point issues)
                 new_start = max(new_start, bound_start)
@@ -12926,7 +12941,7 @@ def convert_excel_to_mspdi(
                 if k in summary_set:
                     stretch_and_clamp_descendants(k, new_start, new_finish)
             
-            print(f"[XML EXPORT] 📐 Stretched {len(kids)} children: original {original_span/86400:.1f} days → target {target_span/86400:.1f} days (ratio={stretch_ratio:.2f})")
+            print(f"[XML EXPORT] ✓ Completed stretch of {len(kids)} children")
         
         # CRITICAL FIX Part 2: Stretch and clamp descendants for all preserved deliverables
         # This ensures child components/tasks FILL the deliverable window set in Gantt (not just clamp)
@@ -12951,6 +12966,14 @@ def convert_excel_to_mspdi(
         
         # TICKET B: Log how many UIDs were protected from rollup overwrite
         print(f"[XML EXPORT] 🛡️ TICKET B: Protected {len(stretched_uids)} stretched UIDs from rollup_summary overwrite")
+        
+        # TICKET B DEBUG: Log sample stretched dates BEFORE rollup
+        print("[TICKET B DEBUG] Sample stretched dates BEFORE rollup_summary:")
+        for uid in list(stretched_uids)[:5]:
+            if uid in uid_to_sched:
+                s = uid_to_sched[uid]["Start"]
+                f = uid_to_sched[uid]["Finish"]
+                print(f"  UID {uid}: Start={s}, Finish={f}")
         
         # 1) roll up start/finish for every summary from its direct/indirect leaves
         def rollup_summary(uid):
@@ -12991,6 +13014,14 @@ def convert_excel_to_mspdi(
         top_uid = min(uid_to_sched.keys())
         if top_uid in summary_set:
             rollup_summary(top_uid)
+
+        # TICKET B DEBUG: Log sample stretched dates AFTER rollup
+        print("[TICKET B DEBUG] Sample stretched dates AFTER rollup_summary:")
+        for uid in list(stretched_uids)[:5]:
+            if uid in uid_to_sched:
+                s = uid_to_sched[uid]["Start"]
+                f = uid_to_sched[uid]["Finish"]
+                print(f"  UID {uid}: Start={s}, Finish={f}")
 
         # 2) Recompute Duration for ALL tasks from Start/Finish span (business minutes)
         # CRITICAL FIX: Use ONLY business day calculation, not max() to avoid calendar day inflation
