@@ -6880,6 +6880,15 @@ async def generate_timeline(request: TimelineGenerationRequest):
                 scenario = state.get("scenario") or {"items": [], "totals": {"hours": 0.0, "price": 0.0}}
                 scenario['timeline'] = result
                 scenario['project_start'] = request.project_start
+                
+                # FIX: Also store timeline_metadata with compression data for export
+                # This ensures compression_map is available for Phase Gate milestone generation
+                compression_data = result.get('metadata', {}).get('compression', {})
+                if compression_data:
+                    scenario['timeline_metadata'] = compression_data
+                    scenario['timeline_tasks'] = result.get('tasks', [])
+                    print(f"[Timeline] 🔧 Stored timeline_metadata with compression_map for {len(compression_data.get('compression_map', {}))} deliverables")
+                
                 update_working_scenario(session_id, scenario)
                 print(f"[Timeline] Stored timeline in SCENARIO_STORE for session {session_id}")
                 print(f"[DEBUG] Timeline storage: SCENARIO_STORE[{session_id}] keys:", list(SCENARIO_STORE[session_id].keys()))
@@ -10869,7 +10878,29 @@ def _export_single_scenario_xml(
         # This version produces clean XML matching the Nov 12 reference without bloat
         # FORCE add_deliverable_milestones=False to override any cached scenario settings
         # TICKET: Pass compression_metadata for business-day durations (Workfront alignment)
+        # FIX: Look for compression data in multiple locations:
+        # 1. scenario['timeline_metadata'] - saved by /api/timeline/save
+        # 2. scenario['timeline']['metadata']['compression'] - saved by timeline generation
         timeline_metadata = scenario.get("timeline_metadata", {})
+        
+        # If timeline_metadata doesn't have compression_map, try to get it from timeline generation result
+        if not timeline_metadata.get("compression_map"):
+            timeline_result = scenario.get("timeline", {})
+            if isinstance(timeline_result, dict):
+                compression_from_gen = timeline_result.get("metadata", {}).get("compression", {})
+                if compression_from_gen and compression_from_gen.get("compression_map"):
+                    # Merge compression data into timeline_metadata
+                    timeline_metadata = {**timeline_metadata, **compression_from_gen}
+                    print(f"[EXPORT_XML] 🔧 Loaded compression_map from scenario['timeline']['metadata']['compression']")
+                    print(f"[EXPORT_XML] 🔧 compression_map has {len(compression_from_gen.get('compression_map', {}))} deliverables")
+                    
+                    # CRITICAL: Persist recovered compression data back into scenario for consistency
+                    # This ensures subsequent exports and downstream consumers have the data
+                    scenario["timeline_metadata"] = timeline_metadata
+                    # Also copy timeline_tasks if available and not already set
+                    if not scenario.get("timeline_tasks") and timeline_result.get("tasks"):
+                        scenario["timeline_tasks"] = timeline_result.get("tasks")
+                    print(f"[EXPORT_XML] 🔧 Persisted timeline_metadata back to scenario")
         stats = convert_excel_to_mspdi(
             input_xlsx=temp_xlsx,
             output_xml=output_xml,
