@@ -6066,10 +6066,21 @@ def compress_deliverable_timeline(
         shift_days = mapping['shift_days']
         
         if shift_days == 0:
-            compressed_tasks.append(task)
+            # TICKET: Even unshifted tasks need working duration fields for frontend display
+            task_copy = task.copy()
+            task_copy['timeline_working_duration_days'] = mapping['duration_business_days']
+            task_copy['timeline_start'] = mapping['new_start']
+            task_copy['timeline_end'] = mapping['new_end']
+            compressed_tasks.append(task_copy)
             continue
         
         new_task = task.copy()
+        
+        # TICKET: Add working duration fields to task for frontend display
+        # This ensures "Working duration (Mon-Fri): X days" shows immediately after Generate AI Timeline
+        new_task['timeline_working_duration_days'] = mapping['duration_business_days']
+        new_task['timeline_start'] = mapping['new_start']
+        new_task['timeline_end'] = mapping['new_end']
         
         task_start = task.get('start', '')
         task_end = task.get('end', '')
@@ -6091,6 +6102,69 @@ def compress_deliverable_timeline(
                 pass
         
         compressed_tasks.append(new_task)
+    
+    # TICKET B: Extend boundary children to span the full deliverable window
+    # This is critical for Workfront: summary task duration is computed from children,
+    # so we must ensure at least one child starts on new_start and one ends on new_end
+    # This must happen AFTER the shift loop to avoid double-shifting
+    
+    # Build a map of children by deliverable_code from compressed_tasks
+    compressed_children_by_deliv: Dict[str, List[dict]] = {}
+    for task in compressed_tasks:
+        deliv_code = task.get('deliverable_code', '')
+        parent_code = task.get('parent_deliverable_code', '') or task.get('parent_code', '')
+        # A task is a child if it has a parent reference OR if it's a component/task level item
+        task_level = task.get('level', 0)
+        if task_level > 2 or (parent_code and parent_code in compression_map):
+            effective_parent = parent_code if parent_code else deliv_code
+            if effective_parent in compression_map:
+                compressed_children_by_deliv.setdefault(effective_parent, []).append(task)
+    
+    # Extend boundary children for each deliverable
+    for code, mapping in compression_map.items():
+        children = compressed_children_by_deliv.get(code, [])
+        if not children:
+            print(f"[Compress TICKET B] {code}: No children found in compressed_tasks")
+            continue
+        
+        new_start_dt = datetime.datetime.fromisoformat(mapping['new_start']).date()
+        new_end_dt = datetime.datetime.fromisoformat(mapping['new_end']).date()
+        
+        print(f"[Compress TICKET B] {code}: Aligning {len(children)} children to span {new_start_dt} -> {new_end_dt}")
+        
+        # Find valid (non-milestone) children with start/end dates
+        valid_children_with_dates = []
+        for child in children:
+            is_milestone = child.get('is_milestone', False) or child.get('name', '').lower().endswith('approval')
+            if is_milestone:
+                continue
+            child_start = child.get('start', '')
+            child_end = child.get('end', '')
+            if child_start and child_end:
+                try:
+                    start_dt = datetime.datetime.fromisoformat(child_start.replace('Z', '')).date()
+                    end_dt = datetime.datetime.fromisoformat(child_end.replace('Z', '')).date()
+                    valid_children_with_dates.append((child, start_dt, end_dt))
+                except (ValueError, AttributeError):
+                    continue
+        
+        if not valid_children_with_dates:
+            print(f"[Compress TICKET B] {code}: No valid non-milestone children found, skipping alignment")
+            continue
+        
+        # Find earliest-starting and latest-ending children
+        earliest_child, earliest_start, _ = min(valid_children_with_dates, key=lambda x: x[1])
+        latest_child, _, latest_end = max(valid_children_with_dates, key=lambda x: x[2])
+        
+        # Set earliest child's start to new_start
+        if earliest_start != new_start_dt:
+            print(f"[Compress TICKET B] Set earliest child '{earliest_child.get('name', '')[:40]}' start: {earliest_start} -> {new_start_dt}")
+            earliest_child['start'] = new_start_dt.isoformat()
+        
+        # Set latest child's end to new_end
+        if latest_end != new_end_dt:
+            print(f"[Compress TICKET B] Set latest child '{latest_child.get('name', '')[:40]}' end: {latest_end} -> {new_end_dt}")
+            latest_child['end'] = new_end_dt.isoformat()
     
     metadata = {
         "compressed": True,
@@ -10794,6 +10868,8 @@ def _export_single_scenario_xml(
         # Use the simple convert_excel_to_mspdi function defined in this file (line 9053)
         # This version produces clean XML matching the Nov 12 reference without bloat
         # FORCE add_deliverable_milestones=False to override any cached scenario settings
+        # TICKET: Pass compression_metadata for business-day durations (Workfront alignment)
+        timeline_metadata = scenario.get("timeline_metadata", {})
         stats = convert_excel_to_mspdi(
             input_xlsx=temp_xlsx,
             output_xml=output_xml,
@@ -10806,7 +10882,8 @@ def _export_single_scenario_xml(
             pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario.get("rate_band", "Standard_US"),
             blended_rate=scenario.get("blended_rate"),
-            add_deliverable_milestones=False  # WORKFRONT COMPAT: Always False (ignore parameter)
+            add_deliverable_milestones=False,  # WORKFRONT COMPAT: Always False (ignore parameter)
+            compression_metadata=timeline_metadata  # TICKET: Business-day durations for Workfront
         )
         
         # Post-process XML to parallelize identical task names (optional)
@@ -12029,7 +12106,8 @@ def convert_excel_to_mspdi(
     rate_band: str = "Standard_US",          # <— NEW: rate band
     blended_rate: Optional[float] = None,    # <— NEW: blended rate
     add_deliverable_milestones: bool = False, # <— NEW: toggle for START/END anchors
-    compressed_timeline: Optional[Dict[str, Any]] = None  # <— TASK 1: Compressed timeline for single source of truth
+    compressed_timeline: Optional[Dict[str, Any]] = None,  # <— TASK 1: Compressed timeline for single source of truth
+    compression_metadata: Optional[Dict[str, Any]] = None  # <— TICKET: Compression metadata for business-day durations
 ) -> Dict[str, int]:
     """
     Convert Excel WBS data to Microsoft Project XML (MSPDI) format with multi-resource merge capability.
@@ -12702,6 +12780,9 @@ def convert_excel_to_mspdi(
                 "DurationHours": duration_hours
             }
 
+        # TICKET B: Initialize compressed_timeline_uids set for child stretching (populated below if compressed_timeline exists)
+        compressed_timeline_uids = set()
+        
         # TASK 1: Apply compressed_timeline as single source of truth for L2 deliverable dates
         # This ensures Step-4 Gantt and XML export use the same schedule
         if compressed_timeline:
@@ -12756,6 +12837,9 @@ def convert_excel_to_mspdi(
                     uid_to_sched[uid]["Finish"] = end_dt
                     uid_to_sched[uid]["DurationHours"] = duration_hours
                     
+                    # TICKET B: Track this UID for child stretching
+                    compressed_timeline_uids.add(uid)
+                    
                     shift_days = (start_dt.date() - old_start.date()).days if hasattr(old_start, 'date') else 0
                     print(f"[XML EXPORT] ✅ L2 {deliv_code}: {old_start.date() if hasattr(old_start, 'date') else 'N/A'} → {start_dt.date()} (shift={shift_days}d)")
                     applied_count += 1
@@ -12772,6 +12856,9 @@ def convert_excel_to_mspdi(
                 children_by_parent[parent_uid] = [wbs_to_uid.get(child_wbs) for child_wbs in child_wbs_list if wbs_to_uid.get(child_wbs)]
         summary_set = set(children_by_parent.keys())
 
+        # TICKET B FIX: Track ALL stretched UIDs (not just top-level) to prevent rollup_summary overwriting
+        stretched_uids = set()
+        
         # Helper function to STRETCH and clamp all descendants to fit within parent's date range
         def stretch_and_clamp_descendants(uid, bound_start, bound_finish):
             """
@@ -12799,22 +12886,37 @@ def convert_excel_to_mspdi(
             # Calculate stretch ratio
             stretch_ratio = target_span / original_span if original_span > 0 else 1.0
             
+            # TICKET B DEBUG: Log this stretch operation BEFORE recursion
+            print(f"[XML EXPORT] 📐 Starting stretch of {len(kids)} children: original {original_span/86400:.1f} days → target {target_span/86400:.1f} days (ratio={stretch_ratio:.2f})")
+            print(f"    [DEBUG] original_min={original_min.date()}, original_max={original_max.date()}, bound_start={bound_start.date()}, bound_finish={bound_finish.date()}")
+            
             for k in kids:
                 child_start = uid_to_sched[k]["Start"]
                 child_finish = uid_to_sched[k]["Finish"]
                 
-                # Calculate proportional position within stretched range
-                # offset_ratio = how far into the original span this child starts
-                offset_seconds = (child_start - original_min).total_seconds()
-                duration_seconds = (child_finish - child_start).total_seconds()
+                # TICKET B FIX: Scale both START and END offsets from original_min
+                # This ensures a child ending at original_max will end at bound_finish
+                start_offset_seconds = (child_start - original_min).total_seconds()
+                end_offset_seconds = (child_finish - original_min).total_seconds()
                 
-                # Scale offset and duration proportionally
-                new_offset_seconds = offset_seconds * stretch_ratio
-                new_duration_seconds = max(3600, duration_seconds * stretch_ratio)  # min 1 hour
+                # Scale both offsets proportionally
+                new_start_offset = start_offset_seconds * stretch_ratio
+                new_end_offset = end_offset_seconds * stretch_ratio
                 
                 # Calculate new start/finish based on bound_start
-                new_start = bound_start + datetime.timedelta(seconds=new_offset_seconds)
-                new_finish = new_start + datetime.timedelta(seconds=new_duration_seconds)
+                new_start = bound_start + datetime.timedelta(seconds=new_start_offset)
+                new_finish = bound_start + datetime.timedelta(seconds=new_end_offset)
+                
+                # Ensure minimum duration of 1 hour
+                if (new_finish - new_start).total_seconds() < 3600:
+                    new_finish = new_start + datetime.timedelta(hours=1)
+                
+                # Calculate new duration for logging
+                new_duration_seconds = (new_finish - new_start).total_seconds()
+                duration_seconds = (child_finish - child_start).total_seconds()
+                
+                # TICKET B DEBUG: Log each child's stretch calculation
+                print(f"  [STRETCH] UID {k}: {child_start.date()} - {child_finish.date()} ({duration_seconds/86400:.1f}d) → {new_start.date()} - {new_finish.date()} ({new_duration_seconds/86400:.1f}d)")
                 
                 # Clamp to bounds (just in case of floating point issues)
                 new_start = max(new_start, bound_start)
@@ -12828,6 +12930,9 @@ def convert_excel_to_mspdi(
                 uid_to_sched[k]["Start"] = new_start
                 uid_to_sched[k]["Finish"] = new_finish
                 
+                # TICKET B FIX: Mark this UID as stretched so rollup_summary won't overwrite it
+                stretched_uids.add(k)
+                
                 # Recalculate duration for stretched child
                 duration_hours = max(1.0, (new_finish - new_start).total_seconds() / 3600)
                 uid_to_sched[k]["DurationHours"] = duration_hours
@@ -12836,7 +12941,7 @@ def convert_excel_to_mspdi(
                 if k in summary_set:
                     stretch_and_clamp_descendants(k, new_start, new_finish)
             
-            print(f"[XML EXPORT] 📐 Stretched {len(kids)} children: original {original_span/86400:.1f} days → target {target_span/86400:.1f} days (ratio={stretch_ratio:.2f})")
+            print(f"[XML EXPORT] ✓ Completed stretch of {len(kids)} children")
         
         # CRITICAL FIX Part 2: Stretch and clamp descendants for all preserved deliverables
         # This ensures child components/tasks FILL the deliverable window set in Gantt (not just clamp)
@@ -12848,6 +12953,28 @@ def convert_excel_to_mspdi(
                 stretch_and_clamp_descendants(preserved_uid, preserved_start, preserved_finish)
                 print(f"[XML EXPORT] 🔒 Stretched descendants of preserved UID {preserved_uid} to fill {preserved_start.date()} to {preserved_finish.date()}")
         
+        # TICKET B: Stretch and clamp descendants for compressed timeline deliverables
+        # This ensures Workfront recomputes the correct summary duration (64 days vs 25 days)
+        # by ensuring child tasks span the full deliverable window (new_start to new_end)
+        if compressed_timeline_uids:
+            for ct_uid in compressed_timeline_uids:
+                if ct_uid in uid_to_sched and ct_uid in children_by_parent:
+                    ct_start = uid_to_sched[ct_uid]["Start"]
+                    ct_finish = uid_to_sched[ct_uid]["Finish"]
+                    stretch_and_clamp_descendants(ct_uid, ct_start, ct_finish)
+                    print(f"[XML EXPORT] 🎯 TICKET B: Stretched children of compressed timeline UID {ct_uid} to fill {ct_start.date()} to {ct_finish.date()}")
+        
+        # TICKET B: Log how many UIDs were protected from rollup overwrite
+        print(f"[XML EXPORT] 🛡️ TICKET B: Protected {len(stretched_uids)} stretched UIDs from rollup_summary overwrite")
+        
+        # TICKET B DEBUG: Log sample stretched dates BEFORE rollup
+        print("[TICKET B DEBUG] Sample stretched dates BEFORE rollup_summary:")
+        for uid in list(stretched_uids)[:5]:
+            if uid in uid_to_sched:
+                s = uid_to_sched[uid]["Start"]
+                f = uid_to_sched[uid]["Finish"]
+                print(f"  UID {uid}: Start={s}, Finish={f}")
+        
         # 1) roll up start/finish for every summary from its direct/indirect leaves
         def rollup_summary(uid):
             kids = children_by_parent.get(uid, [])
@@ -12858,6 +12985,11 @@ def convert_excel_to_mspdi(
             # Descendants were already clamped above, so we don't need to recalculate anything
             # This prevents rollup from overwriting Campaign Plan Deck (Mar 5) back to Jan 5
             if uid in preserved_dates:
+                return uid_to_sched[uid]["Start"], uid_to_sched[uid]["Finish"]
+            
+            # TICKET B FIX: If this UID was stretched, preserve its stretched dates
+            # This prevents rollup from overwriting L3/L4 summary tasks back to short spans
+            if uid in stretched_uids:
                 return uid_to_sched[uid]["Start"], uid_to_sched[uid]["Finish"]
             
             # For non-preserved summaries, recurse to collect child dates
@@ -12882,6 +13014,14 @@ def convert_excel_to_mspdi(
         top_uid = min(uid_to_sched.keys())
         if top_uid in summary_set:
             rollup_summary(top_uid)
+
+        # TICKET B DEBUG: Log sample stretched dates AFTER rollup
+        print("[TICKET B DEBUG] Sample stretched dates AFTER rollup_summary:")
+        for uid in list(stretched_uids)[:5]:
+            if uid in uid_to_sched:
+                s = uid_to_sched[uid]["Start"]
+                f = uid_to_sched[uid]["Finish"]
+                print(f"  UID {uid}: Start={s}, Finish={f}")
 
         # 2) Recompute Duration for ALL tasks from Start/Finish span (business minutes)
         # CRITICAL FIX: Use ONLY business day calculation, not max() to avoid calendar day inflation
@@ -13726,21 +13866,39 @@ def convert_excel_to_mspdi(
                 # LEGACY: SNET constraint + Manual* tags if has children
                 SubElement(task, "Work").text = "PT0M"
                 
-                # FIX: Calculate actual Duration from Start/Finish dates (not hardcoded PT480M)
-                # This fixes the mismatch where Step 4 shows 121 days but Workfront shows 1 day
-                try:
-                    start_str = uid_to_sched[r["UID"]]["Start"]
-                    finish_str = uid_to_sched[r["UID"]]["Finish"]
-                    start_dt = datetime.datetime.fromisoformat(start_str.replace('Z', ''))
-                    finish_dt = datetime.datetime.fromisoformat(finish_str.replace('Z', ''))
-                    duration_days = max(1, (finish_dt - start_dt).days)
-                    duration_minutes = duration_days * 480  # 8-hour workday
-                    SubElement(task, "Duration").text = f"PT{duration_minutes}M"
-                    print(f"[XML EXPORT] 📏 Deliverable Duration: {name_txt[:40]} = {duration_days} days (PT{duration_minutes}M)")
-                except Exception as e:
-                    # Fallback to 1 day
-                    SubElement(task, "Duration").text = "PT480M"
-                    print(f"[XML EXPORT] ⚠️ Duration fallback for {name_txt[:40]}: {e}")
+                # TICKET: Use business days from compression_metadata for Workfront alignment
+                # This ensures the Duration in XML matches what Workfront calculates (Mon-Fri)
+                duration_days = None
+                deliv_code = r.get("DeliverableCode", "")
+                
+                # Try to get business days from compression_metadata first
+                # Note: compression_map can be at top level OR nested under "compression" depending on source
+                if compression_metadata and deliv_code:
+                    comp_map = compression_metadata.get("compression_map", {}) or compression_metadata.get("compression", {}).get("compression_map", {})
+                    if comp_map and deliv_code in comp_map:
+                        biz_days = comp_map[deliv_code].get("duration_business_days")
+                        if biz_days and biz_days > 0:
+                            duration_days = biz_days
+                            print(f"[XML EXPORT] 📏 Deliverable Duration (business days): {name_txt[:40]} = {duration_days} days from compression_map")
+                
+                # Fallback: Calculate BUSINESS DAYS from Start/Finish dates (Mon-Fri only)
+                if not duration_days or duration_days <= 0:
+                    try:
+                        start_str = uid_to_sched[r["UID"]]["Start"]
+                        finish_str = uid_to_sched[r["UID"]]["Finish"]
+                        start_dt = datetime.datetime.fromisoformat(start_str.replace('Z', ''))
+                        finish_dt = datetime.datetime.fromisoformat(finish_str.replace('Z', ''))
+                        # CRITICAL: Use business days (Mon-Fri) not calendar days
+                        duration_days = calculate_business_days_between(start_dt.date(), finish_dt.date())
+                        print(f"[XML EXPORT] 📏 Deliverable Duration (business days fallback): {name_txt[:40]} = {duration_days} days")
+                    except Exception as e:
+                        duration_days = 1
+                        print(f"[XML EXPORT] ⚠️ Duration fallback for {name_txt[:40]}: {e}")
+                
+                # Ensure duration_days is always a valid positive integer
+                duration_days = max(1, int(duration_days or 1))
+                duration_minutes = duration_days * 480  # 8-hour workday
+                SubElement(task, "Duration").text = f"PT{duration_minutes}M"
                 
                 if TIGHT_WATERFALL_ENABLED:
                     # TIGHT WATERFALL MODE: ASAP for most, SNET for first (start gate)
@@ -15152,7 +15310,25 @@ async def save_timeline(request: dict):
             # Identify critical path (simplified - tasks with no slack)
             critical_path = [t["id"] for t in tasks if t.get("is_critical", False)]
         
-        # Update scenario items with timeline data
+        # TICKET: Extract compression_map for working-day durations (Workfront alignment)
+        # Note: compression_map can be at top level OR nested under "compression" depending on source
+        compression_map = metadata.get("compression_map", {}) or metadata.get("compression", {}).get("compression_map", {})
+        
+        # TICKET FIX: First, populate working_duration_days for ALL scenario items from compression_map
+        # This is independent of task-level data and uses deliverable codes directly
+        for item in scen.get("items", []):
+            item_code = item.get("deliverable_code")
+            if item_code and item_code in compression_map:
+                comp_info = compression_map[item_code]
+                item["timeline_working_duration_days"] = comp_info.get("duration_business_days", 0)
+                # Also update start/end from compression if not already set
+                if not item.get("timeline_start") and comp_info.get("new_start"):
+                    item["timeline_start"] = comp_info.get("new_start")
+                if not item.get("timeline_end") and comp_info.get("new_end"):
+                    item["timeline_end"] = comp_info.get("new_end")
+                print(f"[TIMELINE SAVE] {item_code}: Working duration = {item['timeline_working_duration_days']} days (Mon-Fri)")
+        
+        # Update scenario items with timeline data from individual tasks
         for task in tasks:
             deliverable_code = task.get("deliverable_code") or task.get("id", "").split("-")[0]
             
@@ -15173,10 +15349,23 @@ async def save_timeline(request: dict):
                             item["total_hours"] = calculated_hours
                             item["hours_updated_from_timeline"] = True
                     
-                    # Store timeline-specific data
-                    item["timeline_start"] = task.get("start")
-                    item["timeline_end"] = task.get("end")
+                    # Store timeline-specific data (prefer task-level data over compression defaults)
+                    if task.get("start"):
+                        item["timeline_start"] = task.get("start")
+                    if task.get("end"):
+                        item["timeline_end"] = task.get("end")
                     item["timeline_dependencies"] = task.get("dependencies", [])
+                    
+                    # TICKET: Calculate timeline_span_calendar_days from start/end
+                    if item.get("timeline_start") and item.get("timeline_end"):
+                        try:
+                            start_dt = datetime.datetime.fromisoformat(item["timeline_start"].replace("Z", "").replace("+00:00", ""))
+                            end_dt = datetime.datetime.fromisoformat(item["timeline_end"].replace("Z", "").replace("+00:00", ""))
+                            span_days = (end_dt - start_dt).days + 1  # Inclusive
+                            item["timeline_span_calendar_days"] = span_days
+                        except (ValueError, AttributeError):
+                            pass
+                    
                     break
         
         # Store the complete scenario with timeline data using proper dual-entry format

@@ -1,0 +1,180 @@
+🔧 A. Make sure convert_excel_to_mspdi receives compression metadata
+
+In main.py, in _export_single_scenario_xml (search for def _export_single_scenario_xml(), you already have this block:
+
+# TICKET: Pass compression_metadata for business-day durations (Workfront alignment)
+timeline_metadata = scenario.get("timeline_metadata", {})
+
+stats = convert_excel_to_mspdi(
+    input_xlsx=temp_xlsx,
+    output_xml=output_xml,
+    sheet_name=scenario_label,
+    ...
+)
+
+
+👉 Change that call so it passes compression_metadata=timeline_metadata explicitly.
+
+It should look like this (include all your other existing args):
+
+stats = convert_excel_to_mspdi(
+    input_xlsx=temp_xlsx,
+    output_xml=output_xml,
+    sheet_name=scenario_label,
+    fixed_start_iso=project_start_iso,
+    merge_identical_children=False,
+    project_name=project,
+    pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
+    rate_band=scenario.get("rate_band", "Standard_US"),
+    blended_rate=scenario.get("blended_rate"),
+    compressed_timeline=scenario.get("timeline"),
+    compression_metadata=timeline_metadata,   # <<< CRITICAL
+)
+
+
+And in the definition of convert_excel_to_mspdi you must have a parameter for that:
+
+def convert_excel_to_mspdi(
+    input_xlsx: str,
+    output_xml: str,
+    sheet_name: str,
+    start_date_mode: str = "scenario_start",
+    fixed_start_iso: Optional[str] = None,
+    hours_per_day: int = 8,
+    merge_identical_children: bool = False,
+    project_name: Optional[str] = None,
+    pricing_mode: str = "Flat_Blended",
+    rate_band: str = "Standard_US",
+    blended_rate: Optional[float] = None,
+    compressed_timeline: Optional[Dict[str, Any]] = None,
+    compression_metadata: Optional[Dict[str, Any]] = None,  # <<< ADD THIS
+) -> Dict[str, Any]:
+    ...
+
+
+If that parameter is missing, compression_metadata is silently ignored and the deliverable durations will always fall back to calendar span.
+
+🔧 B. Replace the deliverable duration logic with the business‑day version (and remove the old one)
+
+Inside convert_excel_to_mspdi, find the main loop where tasks are built and where you have:
+
+is_summary = (r["WBS"] in summary_set or is_root) and not is_deliverable
+SubElement(task, "Summary").text = "1" if is_summary else "0"
+
+# GPT-5 PRO FIX: Conditional DurationFormat ...
+if TIGHT_WATERFALL_ENABLED and is_deliverable:
+    ...
+else:
+    is_manually_scheduled = is_deliverable or (is_summary and not is_root)
+
+SubElement(task, "DurationFormat").text = "53" if is_manually_scheduled else "7"
+
+# GPT-5 PRO FIX: Reordered branches to prevent overlap (root → deliverable → summary → leaf)
+if is_root:
+    ...
+elif is_deliverable:
+    ...
+
+
+In that elif is_deliverable: block, there are two competing versions in your doc.
+
+You must make sure there is only one, and it should be the business‑day one below (this is the exact version I recommend using):
+
+elif is_deliverable:
+    # DELIVERABLE TASKS (OutlineLevel=2)
+    SubElement(task, "Work").text = "PT0M"
+
+    # Use business days from compression_metadata for Workfront alignment
+    # This ensures the Duration in XML matches what Workfront calculates (Mon–Fri)
+    duration_days = None
+    deliv_code = r.get("DeliverableCode", "")
+
+    # 1) Try to get business days from compression_metadata.compression_map
+    if compression_metadata and deliv_code:
+        comp_map = (
+            compression_metadata.get("compression_map", {})
+            or compression_metadata.get("compression", {}).get("compression_map", {})
+        )
+        if comp_map and deliv_code in comp_map:
+            biz_days = comp_map[deliv_code].get("duration_business_days")
+            if biz_days and biz_days > 0:
+                duration_days = biz_days
+                print(
+                    f"[XML EXPORT] 📏 Deliverable Duration (business days): "
+                    f"{name_txt[:40]} = {duration_days} days from compression_map"
+                )
+
+    # 2) Fallback: calculate BUSINESS DAYS from Start/Finish (NOT calendar days)
+    if not duration_days or duration_days <= 0:
+        try:
+            start_str = uid_to_sched[r["UID"]]["Start"]
+            finish_str = uid_to_sched[r["UID"]]["Finish"]
+            start_dt = datetime.datetime.fromisoformat(start_str.replace("Z", ""))
+            finish_dt = datetime.datetime.fromisoformat(finish_str.replace("Z", ""))
+
+            # CRITICAL: Mon–Fri only
+            duration_days = calculate_business_days_between(
+                start_dt.date(), finish_dt.date()
+            )
+            print(
+                f"[XML EXPORT] 📏 Deliverable Duration (business days fallback): "
+                f"{name_txt[:40]} = {duration_days} days"
+            )
+        except Exception as e:
+            duration_days = 1
+            print(f"[XML EXPORT] ⚠️ Duration fallback for {name_txt[:40]}: {e}")
+
+    # 3) Convert to minutes using 8h working day
+    duration_days = max(1, int(duration_days or 1))
+    duration_minutes = duration_days * 480  # 8-hour workday
+    SubElement(task, "Duration").text = f"PT{duration_minutes}M"
+
+    # (rest of your Type / IsEffortDriven / ManuallyScheduled / ConstraintType logic here)
+
+
+Important:
+
+Delete / comment out any older version in that same block that uses:
+
+duration_days = max(1, (finish_dt - start_dt).days)
+
+
+or logs "Deliverable Duration (calendar fallback)".
+
+With the business‑day version, for Brand Identity Development:
+
+Start = 2025‑11‑10
+
+Finish = 2026‑02‑05
+
+calculate_business_days_between → 64
+
+Duration → 64 * 480 = 30720 → PT30720M in XML.
+
+You already have calculate_business_days_between defined elsewhere in main.py; if not, add this helper:
+
+def calculate_business_days_between(start_date: datetime.date, end_date: datetime.date) -> int:
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+
+    days = 0
+    current = start_date
+    while current <= end_date:
+        if current.weekday() < 5:  # Monday–Friday
+            days += 1
+        current += datetime.timedelta(days=1)
+    return days
+
+🔧 C. (Optional but recommended) Verify with logs
+
+Ask Replit to tail the server logs while doing an export and look for these lines:
+
+[XML EXPORT] 📏 Deliverable Duration (business days): Brand Identity Development ...
+
+Or [XML EXPORT] 📏 Deliverable Duration (business days fallback): ...
+
+You should not see:
+
+[XML EXPORT] 📏 Deliverable Duration (calendar fallback): ...
+
+If they see the “calendar fallback” message, it means they’re still running the old code path.
