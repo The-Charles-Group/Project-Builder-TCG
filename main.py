@@ -13902,7 +13902,7 @@ def convert_excel_to_mspdi(
                 is_manually_scheduled = False
             else:
                 is_manually_scheduled = is_deliverable or (is_summary and not is_root)
-            SubElement(task, "DurationFormat").text = "53" if is_manually_scheduled else "7"
+            SubElement(task, "DurationFormat").text = "7"  # Always use auto-scheduled format for Workfront compatibility
             
             # GPT-5 PRO FIX: Reordered branches to prevent overlap (root → deliverable → summary → leaf)
             if is_root:
@@ -13958,7 +13958,6 @@ def convert_excel_to_mspdi(
                     # FS chain between deliverables is built after all tasks are created
                     SubElement(task, "Type").text = "1"  # Fixed Duration
                     SubElement(task, "IsEffortDriven").text = "0"
-                    SubElement(task, "ManuallyScheduled").text = "0"  # Explicit auto-scheduling
                     
                     # TASK 2: First deliverable gets SNET (start gate), others get ASAP
                     if r["UID"] == first_l2_deliverable_uid:
@@ -13980,14 +13979,9 @@ def convert_excel_to_mspdi(
                         SubElement(task, "ConstraintType").text = "0"  # As Soon As Possible
                         print(f"[TIGHT WATERFALL] ⛓️ Deliverable with ASAP constraint: {name_txt} (WBS {r['WBS']})")
                 else:
-                    # LEGACY MODE: Manual Scheduling tags to lock parent timelines
+                    # LEGACY MODE: Auto-scheduled for Workfront compatibility
                     SubElement(task, "Type").text = "1"  # Fixed Duration
                     SubElement(task, "IsEffortDriven").text = "0"
-                    SubElement(task, "ManuallyScheduled").text = "1"
-                    SubElement(task, "ManualStart").text = "1"
-                    SubElement(task, "ManualFinish").text = "1"
-                    SubElement(task, "ManualDuration").text = "1"
-                    SubElement(task, "ManualWork").text = "1"
                     
                     # SNET constraint to lock deliverable start date
                     start_date_str = uid_to_sched[r["UID"]]["Start"]
@@ -14020,15 +14014,9 @@ def convert_excel_to_mspdi(
                     # Fallback to 1 day
                     SubElement(task, "Duration").text = "PT480M"
                 
-                # GPT-5 PRO SPEC: Summary tasks (OutlineLevel 2-5) need Type, IsEffortDriven, and Manual Scheduling tags
-                # These lock parent timelines and prevent Workfront from recalculating rolled-up dates
+                # WORKFRONT FIX: Remove Manual* tags for import compatibility
                 SubElement(task, "Type").text = "1"  # Fixed Duration
                 SubElement(task, "IsEffortDriven").text = "0"
-                SubElement(task, "ManuallyScheduled").text = "1"
-                SubElement(task, "ManualStart").text = "1"
-                SubElement(task, "ManualFinish").text = "1"
-                SubElement(task, "ManualDuration").text = "1"
-                SubElement(task, "ManualWork").text = "1"
             # Only set Duration/Work for non-summary leaf tasks
             else:
                 # WORKFRONT FIX: Duration MUST equal (Finish - Start) for ALL tasks
@@ -14866,59 +14854,10 @@ def convert_excel_to_mspdi(
         else:
             print(f"[VALIDATION] ⚠️  Found {leaf_constraint_issues} leaf tasks without ASAP constraint")
         
-        # Validation 6: Check all non-root summary tasks have Manual Scheduling tags (GPT-5 Pro spec)
-        manual_tag_issues = 0
-        root_has_manual_tags = False
-        for task_elem in tasks_elem.findall("Task"):
-            summary_elem = task_elem.find("Summary")
-            wbs_elem = task_elem.find("WBS")
-            
-            # Check if this is the root task (WBS="1" is always the project root)
-            is_root_task = wbs_elem is not None and wbs_elem.text == "1"
-            
-            # Check if this is a summary task (has children)
-            if summary_elem is not None and summary_elem.text == "1":
-                # Check for Manual* tags
-                manual_scheduled = task_elem.find("ManuallyScheduled")
-                manual_start = task_elem.find("ManualStart")
-                manual_finish = task_elem.find("ManualFinish")
-                manual_duration = task_elem.find("ManualDuration")
-                manual_work = task_elem.find("ManualWork")
-                
-                # Root should NOT have Manual* tags
-                if is_root_task:
-                    if any([manual_scheduled is not None, manual_start is not None, 
-                           manual_finish is not None, manual_duration is not None, manual_work is not None]):
-                        print(f"[VALIDATION] ❌ Root task should NOT have Manual* tags")
-                        root_has_manual_tags = True
-                else:
-                    # Non-root summaries MUST have Manual* tags
-                    missing_tags = []
-                    if manual_scheduled is None or manual_scheduled.text != "1":
-                        missing_tags.append("ManuallyScheduled")
-                    if manual_start is None or manual_start.text != "1":
-                        missing_tags.append("ManualStart")
-                    if manual_finish is None or manual_finish.text != "1":
-                        missing_tags.append("ManualFinish")
-                    if manual_duration is None or manual_duration.text != "1":
-                        missing_tags.append("ManualDuration")
-                    if manual_work is None or manual_work.text != "1":
-                        missing_tags.append("ManualWork")
-                    
-                    if missing_tags:
-                        name_elem = task_elem.find("Name")
-                        task_name = name_elem.text if name_elem is not None else "Unknown"
-                        if manual_tag_issues < 3:  # Only show first 3
-                            print(f"[VALIDATION] ❌ Summary task missing Manual tags: {task_name[:40]} (missing: {', '.join(missing_tags)})")
-                        manual_tag_issues += 1
-        
-        if manual_tag_issues == 0 and not root_has_manual_tags:
-            print(f"[VALIDATION] ✅ All non-root summary tasks have Manual Scheduling tags, root excluded: PASS")
-        else:
-            if manual_tag_issues > 0:
-                print(f"[VALIDATION] ❌ Found {manual_tag_issues} summary tasks missing Manual* tags")
-            if root_has_manual_tags:
-                print(f"[VALIDATION] ❌ Root task incorrectly has Manual* tags")
+        # Validation 6: SKIPPED - Manual Scheduling tags removed for Workfront import compatibility
+        # Manual* tags (ManuallyScheduled, ManualStart, ManualFinish, ManualDuration, ManualWork)
+        # cause Workfront to reject the file with "couldn't read the file" error
+        print(f"[VALIDATION] ✅ Manual Scheduling tags removed for Workfront compatibility: PASS")
         
         # Validation 7: Verify DurationFormat=7 globally (not 5)
         wrong_duration_format = 0
@@ -15003,6 +14942,12 @@ def convert_excel_to_mspdi(
             
             # Remove extra blank lines that toprettyxml adds
             lines = [line for line in pretty_xml.split('\n') if line.strip()]
+            
+            # WORKFRONT FIX: Replace XML declaration with proper encoding and standalone
+            # Workfront requires: <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            if lines and lines[0].startswith('<?xml'):
+                lines[0] = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            
             final_xml = '\n'.join(lines)
             
             with open(output_xml, 'w', encoding='utf-8') as f:
@@ -15012,8 +14957,10 @@ def convert_excel_to_mspdi(
         except Exception as e:
             # Fallback: write raw XML if pretty printing fails
             print(f"[XML] Pretty print failed, using raw XML: {e}")
+            # WORKFRONT FIX: Still add proper XML declaration for fallback path
+            xml_decl = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
             with open(output_xml, 'w', encoding='utf-8') as f:
-                f.write(xml_string)
+                f.write(xml_decl + xml_string)
                 f.flush()
                 os.fsync(f.fileno())
 
