@@ -48,14 +48,6 @@ Preferred communication style: Simple, everyday language.
   4. Multi-strategy matching (exact, uppercase, sanitized) ensures deliverables with special characters are matched.
   5. Frontend `window.SCENARIO_A` is the single source of truth for pricing; no dependency on ScenarioStore for sync.
   6. `forceSync=true` on exports always syncs to backend regardless of dirty flags.
-- **PostgreSQL Database Persistence (Dec 2025)**: SCENARIO_STORE now persists to PostgreSQL, resolving in-memory data loss on server restarts. Uses `scenario_store` table with session_id, scenario_data JSONB, baseline_data JSONB, totals JSONB, and timestamps. Functions: `_save_scenario_to_db()`, `_load_scenario_from_db()`. Component hours edits survive server restarts through the sync→export pipeline.
-- **Workfront Duration Alignment (Dec 2025)**: Step 4 UI and MSP/XML exports now use business-day durations matching Workfront's "Duration" column:
-  1. `/api/timeline/save` populates `timeline_working_duration_days` (Mon-Fri business days) and `timeline_span_calendar_days` from compression_map.
-  2. `convert_excel_to_mspdi` accepts `compression_metadata` parameter and uses `duration_business_days` for L2 deliverable Duration in XML.
-  3. Step 4 Gantt popup and bar tooltips show "Working duration (Mon-Fri): X days" in green.
-  4. Fallback to calendar days when compression metadata is unavailable.
-  5. **Child Task Extension for Workfront Summary Duration**: Since Workfront recomputes summary task duration from children (ignoring XML Duration values), `convert_excel_to_mspdi()` now stretches child tasks to span the full deliverable window using `stretch_and_clamp_descendants()`. When applying compressed timeline dates to L2 deliverables, the affected UIDs are tracked in `compressed_timeline_uids`, and their descendants are stretched to fill the new_start → new_end window. This ensures Workfront's calculated duration matches the intended working-day duration (e.g., 64 days instead of ~25 days).
-  6. **Stretched UID Protection System (Dec 2025)**: Fixed critical bug where `rollup_summary()` was running after stretching and overwriting L3/L4 summary dates back to short spans. Root cause: L2 deliverables were protected by `preserved_dates`, but their stretched L3/L4 descendants were being recalculated from children. Fix: Added `stretched_uids` set that tracks ALL descendants touched by `stretch_and_clamp_descendants()`, and modified `rollup_summary()` to short-circuit for these UIDs (lines ~12967-12970 in main.py). This ensures stretched dates are preserved through the XML export pipeline.
 - **Parallel Processing**: Utilizes OpenAI Vision API for parallel PDF image processing.
 - **Smart Image Analysis**: Two-tier image processing system with pre-filtering and deep analysis.
 - **Session Isolation System**: Complete data isolation between different RFPs using unique session IDs.
