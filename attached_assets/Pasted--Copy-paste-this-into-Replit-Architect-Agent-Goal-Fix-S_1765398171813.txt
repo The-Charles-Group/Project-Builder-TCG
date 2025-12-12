@@ -1,0 +1,348 @@
+✅ Copy‑paste this into Replit Architect / Agent
+
+Goal
+Fix Step 3 so that:
+
+Both Project Scenario and Deliverable Pricing Details are pre‑populated when the user clicks Proceed to Pricing from Step 2.
+
+Any edits in Pricing Details (deliverable hours, component hours, rates, cadence/type) are written back into the canonical scenario stored in the backend.
+
+All downstream consumers – Grand Total tiles, Gantt/timeline, XML/XLSX/CSV/PDF, Workfront – always read from that same canonical scenario, so numbers like Brand Identity Development hours (308 vs 300) can never diverge again.
+
+The backend already has a unified scenario store and sync endpoint:
+
+SCENARIO_STORE and _CURRENT_SCENARIOS
+
+Real‑time sync: /api/scenario/sync and merge_scenario_from_sync(session_id)
+
+Pricing breakdown: /api/pricing/rebuild_breakdown (now uses get_hours_from_item())
+
+Exports (Workfront XML, etc.) already call _get_scenarios(session_id) and work off SCENARIO_STORE.
+
+The remaining bugs are on the frontend data flow:
+
+Step 3 initial load does not always hydrate both panels from the backend scenario.
+
+Pricing Details edits update local UI state, but do not reliably mutate the scenario that is sent to /api/scenario/sync, so exports still see old hours.
+
+The “Build Scenario” button on Step 3 still rebuilds from Step 2 / default data, overwriting Step 3 edits, which is why Workfront sometimes shows 300h while the Pricing screen shows 308h.
+
+We must treat SCENARIO_STORE[session_id]["scenario"] as the single source of truth for all pricing + timeline + export logic.
+
+1. Step 3 should always initialize from the backend scenario
+
+Task 1.1 – Add an init function
+
+In the JS file that powers Step 3 (where Build Scenario, Rebuild, and the Deliverable Pricing Details grid are wired), create:
+
+async function initPricingStep() {
+  const sessionId = window.SESSION_ID;
+  if (!sessionId) {
+    console.error("No SESSION_ID on Step 3");
+    return;
+  }
+
+  // 1) Ask backend for current working scenario (no rebuild)
+  const scenarioRes = await fetch(`/api/scenarios`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, reset: false })
+  });
+
+  const data = await scenarioRes.json();
+  // data should include scenarioA / scenario(s); pick A or default
+  const scenario = data.scenarioA || data.scenario || data[0]?.scenario;
+  if (!scenario || !scenario.items || !scenario.items.length) {
+    console.warn("No working scenario found, falling back to buildScenariosAB");
+    // Existing function that builds from Step 2:
+    const built = await buildScenariosAB();     // DO NOT re‑build anywhere else
+    window.SCENARIO_A = built.scenarioA || built.scenario;
+  } else {
+    window.SCENARIO_A = scenario;
+  }
+
+  // 2) Rebuild pricing UI from backend scenario
+  await rebuildPricingFromBackend(window.SCENARIO_A);
+}
+
+
+Wire this to Step 3 load:
+
+document.addEventListener("DOMContentLoaded", () => {
+  if (window.STEP_NAME === "pricing" || window.IS_STEP3_PRICING) {
+    initPricingStep().catch(err => console.error("initPricingStep failed", err));
+  }
+});
+
+
+Important: rebuildPricingFromBackend(scenario) should not create a new scenario – it should call /api/pricing/rebuild_breakdown using the current session id, and then populate both:
+
+the Project Scenario table
+
+the Deliverable Pricing Details grid
+
+from the breakdown and window.SCENARIO_A.
+
+2. Use a single in‑memory scenario for Step 3
+
+Right now there are separate states (e.g. some “pricing” structure + window.SCENARIO_A). Collapse this so that:
+
+window.SCENARIO_A is the only authoritative client‑side copy of the scenario.
+
+All UI renderers read from it.
+
+All UI edits write back to it.
+
+Add helpers in JS:
+
+function findScenarioItem(deliverableCode, componentCode) {
+  if (!window.SCENARIO_A || !window.SCENARIO_A.items) return null;
+  return window.SCENARIO_A.items.find(item => {
+    return (
+      item.deliverable_code === deliverableCode &&
+      (item.component_code || item.component) === componentCode
+    );
+  }) || null;
+}
+
+function setItemHours(item, newHours) {
+  const h = Number(newHours) || 0;
+  item.hours = h;
+  item.Planned_Hours = h;
+  item.planned_hours = h;
+  // price will be recomputed server‑side from rate if needed
+}
+
+3. Wire Deliverable Pricing Details edits into the scenario
+
+Task 3.1 – Attach event handlers
+
+Where you render the Deliverable Pricing Details table, ensure each row has data attributes:
+
+<tr
+  class="pricing-row"
+  data-deliverable-code="BID"
+  data-component-code="BID_Color_Palette"
+>
+  ...
+  <input class="pricing-hours-input" ... />
+  <input class="pricing-rate-input" ... />
+</tr>
+
+
+Then in JS:
+
+let pricingDetailsDirty = false;
+
+function attachPricingDetailsHandlers() {
+  document.querySelectorAll(".pricing-row").forEach(row => {
+    const delivCode = row.dataset.deliverableCode;
+    const compCode  = row.dataset.componentCode || null;
+
+    const hoursInput = row.querySelector(".pricing-hours-input");
+    const rateInput  = row.querySelector(".pricing-rate-input");
+
+    if (hoursInput) {
+      hoursInput.addEventListener("change", () => {
+        const item = findScenarioItem(delivCode, compCode);
+        if (item) {
+          setItemHours(item, hoursInput.value);
+          pricingDetailsDirty = true;
+          markPricingUpdateButtonDirty(true);
+        }
+        // also update the visible deliverable total in the UI
+        recalcDeliverableTotalsInUi(delivCode);
+      });
+    }
+
+    if (rateInput) {
+      rateInput.addEventListener("change", () => {
+        const item = findScenarioItem(delivCode, compCode);
+        if (item) {
+          const r = Number(rateInput.value) || 0;
+          item.Rate_USD = r;
+          item.rate = r;
+          pricingDetailsDirty = true;
+          markPricingUpdateButtonDirty(true);
+        }
+      });
+    }
+  });
+}
+
+
+Call attachPricingDetailsHandlers() at the end of rebuildPricingFromBackend() after the table has been rendered.
+
+Task 3.2 – Keep parent deliverable hours in sync
+
+Create a utility that recomputes the parent deliverable row as the sum of its components, and also updates the scenario item for the parent:
+
+function recalcDeliverableTotalsInUi(deliverableCode) {
+  if (!window.SCENARIO_A || !window.SCENARIO_A.items) return;
+
+  const items = window.SCENARIO_A.items;
+  const parent = items.find(
+    it => it.deliverable_code === deliverableCode && !it.component_code && !it.component
+  );
+  const children = items.filter(
+    it => it.deliverable_code === deliverableCode && (it.component_code || it.component)
+  );
+
+  const total = children.reduce((sum, it) => {
+    const h = Number(it.hours ?? it.Planned_Hours ?? it.planned_hours ?? 0);
+    return sum + (isNaN(h) ? 0 : h);
+  }, 0);
+
+  if (parent) {
+    setItemHours(parent, total); // ensures parent item matches components
+  }
+
+  // update the Project Scenario table cell
+  const row = document.querySelector(
+    `.project-scenario-row[data-deliverable-code="${deliverableCode}"]`
+  );
+  if (row) {
+    const cell = row.querySelector(".scenario-hours-cell");
+    if (cell) cell.textContent = total.toFixed(0);
+  }
+}
+
+
+This is what should prevent the “3 extra hours magically added” behaviour: parent hours become exactly the sum of components, and those are what get synced.
+
+4. Add a dedicated “Update Pricing” button for Pricing Details
+
+Task 4.1 – Add button markup
+
+In the Deliverable Pricing Details panel (below the grid), add:
+
+<button id="pricing-update-btn" class="btn btn-primary" disabled>
+  Update Pricing
+</button>
+
+
+With helper:
+
+function markPricingUpdateButtonDirty(isDirty) {
+  const btn = document.getElementById("pricing-update-btn");
+  if (!btn) return;
+  btn.disabled = !isDirty;
+  btn.textContent = isDirty ? "Update Pricing (unsaved changes)" : "Pricing Up to Date";
+}
+
+
+Task 4.2 – Implement syncScenarioToBackend()
+
+Re‑use the existing backend sync endpoint /api/scenario/sync. On the frontend, create:
+
+window.SCENARIO_SYNC_STATE = window.SCENARIO_SYNC_STATE || {
+  version: 0,
+  lastServerVersion: 0,
+  checksum: ""
+};
+
+async function syncScenarioToBackend() {
+  const sessionId = window.SESSION_ID;
+  if (!sessionId || !window.SCENARIO_A) return null;
+
+  const payload = {
+    session_id: sessionId,
+    client_version: window.SCENARIO_SYNC_STATE.version || 0,
+    last_server_version: window.SCENARIO_SYNC_STATE.lastServerVersion || 0,
+    scenario: window.SCENARIO_A,
+    selections: {}, // if you track row selections, pass them here
+    timestamp: Date.now(),
+    checksum: ""    // optional, leave blank for now
+  };
+
+  const res = await fetch("/api/scenario/sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await res.json();
+
+  // Update sync state
+  window.SCENARIO_SYNC_STATE.version = data.serverVersion;
+  window.SCENARIO_SYNC_STATE.lastServerVersion = data.serverVersion;
+
+  if (data.hasChanges && data.scenario) {
+    // server is authoritative
+    window.SCENARIO_A = data.scenario;
+  }
+
+  return data;
+}
+
+
+Task 4.3 – Implement Update Pricing button behaviour
+
+document.addEventListener("click", async (e) => {
+  if (e.target && e.target.id === "pricing-update-btn") {
+    e.preventDefault();
+    if (!pricingDetailsDirty) return;
+
+    try {
+      // 1) Sync client scenario changes to backend
+      await syncScenarioToBackend();
+
+      // 2) Rebuild pricing cards and tables from backend scenario
+      await rebuildPricingFromBackend(window.SCENARIO_A);
+
+      pricingDetailsDirty = false;
+      markPricingUpdateButtonDirty(false);
+    } catch (err) {
+      console.error("Update Pricing failed", err);
+      alert("Update Pricing failed. See console for details.");
+    }
+  }
+});
+
+5. Rewire the “Build Scenario” button on Step 3
+
+Right now, clicking Build Scenario on Step 3 is apparently still calling buildScenariosAB() or another backend builder, which re‑creates the scenario from Step 2 and wipes out your Step 3 edits.
+
+Change that:
+
+Step 2 ➜ Step 3 transition may still call buildScenariosAB() once to seed the scenario.
+
+On Step 3 itself, the “Build Scenario” button should just mean “Apply current pricing edits to the scenario & recompute totals”, exactly like the Update Pricing button.
+
+Implementation:
+
+async function onBuildScenarioClick(e) {
+  e.preventDefault();
+  // treat Build Scenario as "commit and rebuild"
+  await syncScenarioToBackend();
+  await rebuildPricingFromBackend(window.SCENARIO_A);
+  pricingDetailsDirty = false;
+  markPricingUpdateButtonDirty(false);
+}
+
+// Ensure the existing button uses this handler
+document.getElementById("build-scenario-btn")
+  ?.addEventListener("click", onBuildScenarioClick);
+
+
+DO NOT call buildScenariosAB() inside this handler.
+
+6. Guarantee exports use the synced scenario
+
+On the backend this is almost there, but please confirm:
+
+In any export handler (/api/export_xml, Workfront XML export, timeline exports), before building the Excel / XML:
+
+Call merge_scenario_from_sync(session_id) to ensure SCENARIO_STORE[session_id]["scenario"] includes the latest Step 3 edits from SCENARIO_SYNC_STATE.
+
+Call _recompute_totals() on that scenario (this is already done inside merge_scenario_from_sync + sync_scenario, but verify).
+
+Then always derive the timeline / MSPDI / Workfront XML via:
+
+scenario = get_working_scenario(session_id)
+
+scenario = _recompute_totals(scenario)
+
+Use get_hours_from_item() and get_price_from_item() for any hours/price math.
+
+That ensures the exports see the same hours that the pricing breakdown panel sees.

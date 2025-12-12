@@ -1,0 +1,374 @@
+0. Design goal (what we want)
+
+Single source of truth = SCENARIO_STORE[session_id]["scenario"]
+
+Step 3 load: when you hit “Proceed to pricing”
+→ Step 3 opens with both panels filled (Project Scenario and Deliverable Pricing Details).
+
+Edits in Deliverable Pricing Details:
+
+Update the in‑memory scenario (window.SCENARIO_A.items).
+
+User clicks an Update Pricing button in that panel.
+
+That calls /api/scenario/sync → /api/pricing/rebuild_breakdown → UI refreshed.
+
+Exports (XML / Gantt / PDFs / XLSX):
+
+Always call /api/scenario/sync with the current window.SCENARIO_A before exporting.
+
+Exports always use get_working_scenario(session_id).
+
+If we wire all of that, the hours that you see in Step 3 will be exactly what shows up in Workfront.
+
+1. Frontend – Step 3 Initial Load
+Task F1 – Add initPricingStep() on Step 3
+
+Goal: When Step 3 loads, auto‑load the working scenario and build both panels; don’t require clicking “Build Scenario”.
+
+In the Step 3 JS file (where buildScenariosAB, updatePricing, etc. live) add:
+
+async function initPricingStep() {
+  const sessionId = window.SESSION_ID; // however you already store this
+
+  // 1) Ask backend for the working scenario (no reset)
+  const resp = await fetch('/api/scenarios', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ session_id: sessionId, reset: false })
+  });
+  const data = await resp.json();
+  if (!data.ok || !data.scenarios || !data.scenarios.A) {
+    console.warn('initPricingStep: no scenario available');
+    return;
+  }
+
+  // 2) Cache scenario A in window
+  window.SCENARIO_A = data.scenarios.A;
+
+  // 3) Build pricing panels using backend‑authoritative breakdown
+  await rebuildPricingFromBackend(window.SCENARIO_A);
+}
+
+
+Then in your Step 3 HTML page JS bootstrap (where you currently set up listeners), call:
+
+document.addEventListener('DOMContentLoaded', () => {
+  initPricingStep().catch(console.error);
+});
+
+Task F2 – Make Step‑3 “Build Scenario” not rebuild from Step 2
+
+Right now, clicking Build Scenario on Step 3 seems to run the Step 2 build again and wipes your pricing grid.
+
+Change the handler for the Step‑3 Build button to only:
+
+Sync current window.SCENARIO_A to backend.
+
+Rebuild pricing breakdown from backend.
+
+Re‑render both panels.
+
+Something like:
+
+async function handleBuildScenarioClick() {
+  if (!window.SCENARIO_A) return;
+
+  const synced = await syncScenarioToBackend(window.SCENARIO_A);
+  const rebuilt = await rebuildPricingFromBackend(synced.scenario || window.SCENARIO_A);
+  window.SCENARIO_A = rebuilt.scenario;
+
+  renderScenarioPanels(rebuilt); // existing functions to draw top + bottom
+}
+
+
+Make sure Step 2 → Step 3 navigation is still the only place that calls buildScenariosAB() or the equivalent heavy baseline builder.
+
+2. Frontend – Editing Deliverable Pricing Details
+Task F3 – Track edits and wire them into window.SCENARIO_A
+
+Define a flag and helpers at top of Step 3 JS:
+
+let pricingDetailsDirty = false;
+
+function markPricingDirty() {
+  pricingDetailsDirty = true;
+  const btn = document.getElementById('btn-update-pricing-details');
+  if (btn) btn.disabled = false;
+}
+
+
+When the user edits hours/rate/type in the Deliverable Pricing Details grid:
+
+function onPricingCellChange(wbsId, field, value) {
+  // 1) Keep whatever grid state you already maintain
+  updatePricingGridState(wbsId, field, value); // existing or new helper
+
+  // 2) Update the in-memory scenario
+  const scen = window.SCENARIO_A;
+  if (scen && scen.items) {
+    const item = scen.items.find(i => i.WBS_ID === wbsId);
+    if (item) {
+      if (field === 'hours') item.Planned_Hours = Number(value) || 0;
+      if (field === 'rate') item.Rate = Number(value) || 0;
+      if (field === 'type') item.Cadence = value; // or your cadence field
+    }
+  }
+
+  // 3) Mark dirty
+  markPricingDirty();
+}
+
+
+Hook onPricingCellChange into your inputs’ change / blur events.
+
+Task F4 – Add an “Update Pricing” button in Deliverable Pricing details
+
+In the Deliverable Pricing Details panel markup, add a button:
+
+<button id="btn-update-pricing-details" disabled>Update Pricing</button>
+
+
+Then implement:
+
+async function handleUpdatePricingClick() {
+  if (!pricingDetailsDirty || !window.SCENARIO_A) return;
+
+  // 1) Sync Step 3 edits to backend (SCENARIO_SYNC_STATE + SCENARIO_STORE)
+  const syncResult = await syncScenarioToBackend(window.SCENARIO_A);
+
+  // 2) Rebuild pricing breakdown (grand total, project cards, pricing grid)
+  const rebuilt = await rebuildPricingFromBackend(syncResult.scenario || window.SCENARIO_A);
+
+  // 3) Replace local scenario with authoritative one and redraw
+  window.SCENARIO_A = rebuilt.scenario;
+  renderScenarioPanels(rebuilt);
+
+  // 4) Clear dirty flag
+  pricingDetailsDirty = false;
+  const btn = document.getElementById('btn-update-pricing-details');
+  if (btn) btn.disabled = true;
+}
+
+document.getElementById('btn-update-pricing-details')
+  .addEventListener('click', () => handleUpdatePricingClick().catch(console.error));
+
+Task F5 – Implement syncScenarioToBackend and reuse everywhere
+
+Shape it to match ScenarioSyncPayload on the backend (you can see that in main.py):
+
+async function syncScenarioToBackend(scenario) {
+  const sessionId = window.SESSION_ID;
+
+  const payload = {
+    session_id: sessionId,
+    client_version: (window.SCENARIO_CLIENT_VERSION || 1),
+    last_server_version: (window.SCENARIO_SERVER_VERSION || 0),
+    scenario,
+    selections: window.SCENARIO_SELECTIONS || {},
+    timestamp: new Date().toISOString(),
+    checksum: null
+  };
+
+  const resp = await fetch('/api/scenario/sync', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  });
+  const data = await resp.json();
+
+  window.SCENARIO_SERVER_VERSION = data.serverVersion;
+  window.SCENARIO_CLIENT_VERSION = (window.SCENARIO_CLIENT_VERSION || 1) + 1;
+
+  // make it easy for callers
+  return {
+    scenario: (data.serverScenario || payload.scenario),
+    serverState: data
+  };
+}
+
+Task F6 – rebuildPricingFromBackend helper
+
+This already exists in your codebase in some form; make sure it:
+
+POSTs the current scenario + session_id to /api/pricing/rebuild_breakdown
+
+Returns the scenario and breakdown you need to render both panels.
+
+Example:
+
+async function rebuildPricingFromBackend(scenario) {
+  const sessionId = window.SESSION_ID;
+
+  const resp = await fetch('/api/pricing/rebuild_breakdown', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ session_id: sessionId, scenario })
+  });
+
+  const data = await resp.json();
+  // Expected: { scenario, totals, breakdown, oneTime, retainer, ... }
+  window.SCENARIO_A = data.scenario || scenario;
+
+  renderScenarioPanels(data);
+  return data;
+}
+
+3. Frontend – Exports must sync first
+Task F7 – Always sync before any export
+
+Where you call the export endpoints (Workfront XML, weekly/monthly PDF, XLSX, CSV), wrap them like this:
+
+async function onExportWorkfrontClick() {
+  if (window.SCENARIO_A) {
+    await syncScenarioToBackend(window.SCENARIO_A);
+  }
+  // now call the existing export endpoint
+  await downloadFileFromPost('/api/export/workfront', { session_id: window.SESSION_ID });
+}
+
+
+Do the same pattern for:
+
+/api/export/scenario_excel
+
+/api/export/timeline_weekly
+
+/api/export/timeline_monthly
+
+Any other export that depends on pricing/timeline.
+
+This guarantees the backend scenario is always the one you see in the UI at the moment you export.
+
+4. Backend – Ensure exports use get_working_scenario
+Task B1 – Verify /api/scenarios returns working scenario on load
+
+You already have this logic:
+
+# CASE 0: USE WORKING SCENARIO FROM SCENARIO_STORE (preserve Step 3 edits)
+if session_id and not reset_flag and session_id in SCENARIO_STORE:
+    scenario = get_working_scenario(session_id)
+    ...
+    return {
+        "ok": True,
+        "scenarios": {"A": scenario},
+        "totals": {"A": totals},
+        ...
+    }
+
+
+This is what initPricingStep() relies on – just don’t change it. 
+
+12:09:25 - step 3 component box
+
+What matters is that Step 2 stores the baseline once, and Step 3 only reads from here.
+
+Task B2 – ScenarioSyncPayload already merges into SCENARIO_STORE
+
+/api/scenario/sync already:
+
+Stores the client scenario into SCENARIO_SYNC_STATE
+
+Calls merge_scenario_from_sync(session_id)
+
+Then runs _recompute_totals on SCENARIO_STORE[session_id]["scenario"] 
+
+12:09:25 - step 3 component box
+
+So you don’t need new backend logic for saving hours – just make sure the frontend actually calls this endpoint via syncScenarioToBackend.
+
+Task B3 – Exports: always use get_working_scenario(session_id)
+
+In each export endpoint:
+
+api_export_mspdi (Workfront XML)
+
+Weekly timeline export
+
+Monthly timeline export
+
+Scenario Excel export
+
+Make sure the first thing you do is:
+
+scenario = get_working_scenario(payload.session_id)
+if not scenario or not scenario.get("items"):
+    raise HTTPException(404, f"Scenario not found for session {payload.session_id}")
+
+scenario = _recompute_totals(scenario)
+update_working_scenario(payload.session_id, scenario)
+
+
+Then pass scenario into your helpers:
+
+df = build_wbs_dataframe_from_scenario(
+    scenario,
+    project_name=payload.project_name or scenario.get("project_name", "Project")
+)
+
+xml_bytes = convert_excel_to_mspdi(
+    df,
+    project_name=payload.project_name,
+    compressed_timeline=scenario.get("timeline")
+)
+
+
+The key is: never pull from _CURRENT_SCENARIOS or the original workbook for hours; always from get_working_scenario.
+
+Task B4 – Add a tiny debug endpoint for sanity checks (optional but recommended)
+
+This will help you or the architect verify Brand Identity Development hours at each stage.
+
+from fastapi import HTTPException
+
+@app.get("/api/debug/deliverable_hours/{session_id}/{deliverable_code}")
+def debug_deliverable_hours(session_id: str, deliverable_code: str):
+    scenario = get_working_scenario(session_id)
+    if not scenario or not scenario.get("items"):
+        raise HTTPException(404, "Scenario not found")
+
+    items = scenario["items"]
+    rows = [i for i in items if i.get("Deliverable_Code") == deliverable_code]
+    hours = sum(i.get("Planned_Hours", 0) for i in rows)
+
+    return {
+        "deliverable_code": deliverable_code,
+        "rows": len(rows),
+        "scenario_hours_sum": hours,
+        "rows_detail": [
+            {
+                "WBS_ID": r.get("WBS_ID"),
+                "Component": r.get("Component"),
+                "Planned_Hours": r.get("Planned_Hours")
+            } for r in rows
+        ]
+    }
+
+
+If you hit this endpoint and see 307, then export and it’s 300 somewhere, you know the issue is further down (e.g. in build_wbs_dataframe_from_scenario or MS Project XML conversion). That gives the architect a precise place to look instead of guessing.
+
+5. What to actually tell the Replit Architect/Agent
+
+You can paste something like this into Plan Mode (shortened if you want):
+
+Goal: Make Step 3 pricing single‑source‑of‑truth and ensure all exports use exactly the same scenario hours (Brand Identity Development mismatch 307 vs 300 is an example).
+
+Frontend tasks:
+
+Implement initPricingStep() on Step 3 that calls /api/scenarios with {session_id, reset:false}, stores scenarios.A into window.SCENARIO_A, and calls rebuildPricingFromBackend(window.SCENARIO_A) so that both Project Scenario and Deliverable Pricing Details are populated on first load.
+
+Change the Step‑3 Build Scenario button so it no longer rebuilds from baseline. It should only: syncScenarioToBackend(window.SCENARIO_A) → rebuildPricingFromBackend(...) → re‑render panels.
+
+Wire Deliverable Pricing Details inputs so edits update window.SCENARIO_A.items[*].Planned_Hours/Rate/Cadence and set a pricingDetailsDirty flag.
+
+Add an Update Pricing button inside the Deliverable Pricing Details panel. When clicked and dirty, it should call syncScenarioToBackend(window.SCENARIO_A), then rebuildPricingFromBackend, then clear the dirty flag.
+
+Before any export (XML, weekly/monthly timeline, scenario Excel, etc.), call syncScenarioToBackend(window.SCENARIO_A) to ensure SCENARIO_STORE is up to date.
+
+Backend tasks:
+
+Confirm /api/scenarios continues to use get_working_scenario(session_id) when reset=false, so returning to Step 3 preserves Step 3 edits.
+
+Ensure all export endpoints (Workfront XML, timeline_weekly, timeline_monthly, scenario XLSX/CSV) call get_working_scenario(session_id) and _recompute_totals() instead of using _CURRENT_SCENARIOS or raw workbook data.
+
+(Optional) Add /api/debug/deliverable_hours/{session_id}/{deliverable_code} to quickly confirm that scenario hours for a deliverable (e.g. Brand Identity Development) match the UI before export.

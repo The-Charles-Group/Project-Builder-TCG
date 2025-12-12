@@ -1,0 +1,255 @@
+🚀 THE COMPLETE FIX — COPY‑PASTE FOR THE REPLIT ARCHITECT
+
+Below is the exact implementation plan and code structure the agent must apply.
+
+=======================================
+✅ PART 1 — Step 3 initial load (critical)
+=======================================
+A. Create initPricingStep() in Step‑3 JS
+
+Run this on DOMContentLoaded.
+
+Goal: both panels must be populated immediately
+
+(no more blank Project Scenario panel until clicking Build Scenario)
+
+async function initPricingStep() {
+  const sessionId = window.SESSION_ID;
+  if (!sessionId) return;
+
+  // 1. Load working scenario (NO RESET!)
+  const res = await fetch('/api/scenarios', {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, reset: false })
+  });
+
+  const data = await res.json();
+  if (!data.ok || !data.scenarios || !data.scenarios.A) {
+    console.error("No scenario found. Cannot load Step 3.");
+    return;
+  }
+
+  // 2. Store working scenario globally
+  window.SCENARIO_A = data.scenarios.A;
+
+  // 3. Populate BOTH panels + summary cards
+  await rebuildPricingFromBackend(window.SCENARIO_A);
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  initPricingStep();
+});
+
+
+📌 This must replace the current behavior where Step 3 loads only Pricing Details.
+
+=======================================
+✅ PART 2 — Capture ALL Step‑3 edits into the scenario
+=======================================
+
+Right now, when the user changes component hours, Step 3 shows 308,
+but scenario.items still holds 300, so XML shows 300.
+
+B. Add a unified collector
+function collectScenarioFromUi() {
+  const scenario = JSON.parse(JSON.stringify(window.SCENARIO_A));
+
+  // Collect top-level deliverable hours from Project Scenario table
+  document.querySelectorAll('[data-deliverable-row]').forEach(row => {
+    const dcode = row.dataset.deliverableCode;
+    const hours = parseFloat(row.querySelector('.deliverable-hours-input').value);
+    const rate  = parseFloat(row.querySelector('.deliverable-rate-input').value);
+
+    const item = scenario.items.find(i => String(i.Deliverable_Code) === String(dcode));
+    if (item) {
+      item.Planned_Hours = hours;
+      item.Rate_USD = rate;
+      item.Price_USD = hours * rate;
+    }
+  });
+
+  // Collect component hours from Pricing Details table
+  document.querySelectorAll('[data-component-row]').forEach(row => {
+    const dcode = row.dataset.deliverableCode;
+    const comp  = row.dataset.component;
+    const hours = parseFloat(row.querySelector('.component-hours-input').value);
+    const rate  = parseFloat(row.querySelector('.component-rate-input').value);
+
+    const item = scenario.items.find(i =>
+      String(i.Deliverable_Code) === String(dcode) &&
+      String(i.Component) === String(comp)
+    );
+    if (item) {
+      item.Planned_Hours = hours;
+      item.Rate_USD = rate;
+      item.Price_USD = hours * rate;
+    }
+  });
+
+  return scenario;
+}
+
+
+📌 This ensures deliverable = 308 hours is always reflected in the scenario.
+
+=======================================
+✅ PART 3 — Proper sync path (must happen BEFORE export)
+=======================================
+C. Sync before any pricing rebuild
+async function syncScenarioToBackend(scenario) {
+  const sessionId = window.SESSION_ID;
+
+  const res = await fetch('/api/scenario/sync', {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_id: sessionId,
+      scenario: scenario
+    })
+  });
+
+  const data = await res.json();
+  if (!data.success) throw new Error("Scenario sync failed");
+
+  // Backend returns authoritative scenario
+  window.SCENARIO_A = data.scenario;
+  return data.scenario;
+}
+
+D. Rebuild pricing afterwards (one source of truth)
+async function rebuildPricingFromBackend(scenario) {
+  const sessionId = window.SESSION_ID;
+
+  // 1. Sync first
+  await syncScenarioToBackend(scenario);
+
+  // 2. Ask backend for authoritative breakdown
+  const res = await fetch("/api/pricing/rebuild_breakdown", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId })
+  });
+
+  const data = await res.json();
+
+  // 3. Render BOTH panels from backend response
+  renderProjectScenario(data.breakdown);
+  renderPricingDetails(data.breakdown);
+  renderSummaryCards(data.summary);
+
+  return data;
+}
+
+=======================================
+✅ PART 4 — Repair Step‑3 “Build Scenario” button
+=======================================
+
+The current button still rebuilds from baseline.
+
+🔴 This destroys all user edits
+🔴 This is why your hours revert
+🔴 This is why XML still shows 300
+
+Replace the handler:
+
+document.getElementById("build-scenario-btn").onclick = async () => {
+  const updatedScenario = collectScenarioFromUi();
+  await rebuildPricingFromBackend(updatedScenario);
+};
+
+=======================================
+✅ PART 5 — Export must ALWAYS sync before generating XML
+=======================================
+
+Your exports must NOT read stale scenario data.
+
+E. Modify every export button:
+async function exportScenarioA() {
+  // 1. Push UI changes into scenario
+  const scenario = collectScenarioFromUi();
+
+  // 2. Sync to backend
+  await syncScenarioToBackend(scenario);
+
+  // 3. Rebuild pricing (ensures totals correct)
+  await rebuildPricingFromBackend(scenario);
+
+  // 4. Export after sync
+  const sessionId = window.SESSION_ID;
+  window.location.href = `/api/export/xml/a?session_id=${sessionId}`;
+}
+
+
+Do this for:
+
+XML A
+
+XML B
+
+XLSX
+
+CSV
+
+PDF (weekly, monthly)
+
+Final Ship ZIP
+
+📌 This guarantees Workfront XML sees EXACTLY the same numbers the user sees.
+
+=======================================
+✅ PART 6 — Backend: ensure no stale hours survive
+=======================================
+
+Add this inside the XML generation endpoint (Workfront export):
+
+Right before building the WBS:
+
+# CRITICAL: force merge latest synced scenario
+merge_scenario_from_sync(session_id)
+
+scenario = get_working_scenario(session_id)
+scenario = _recompute_totals(scenario)   # ensures item-level hours are correct
+
+
+📌 This ensures:
+
+XML = synced scenario
+
+Scenario = Step‑3 UI
+
+WBS harmonization uses correct hours
+
+Timeline tasks already reflect correct hours
+
+Final output matches app
+
+=======================================
+🚨 REQUIRED VALIDATION TEST (ask Replit to run these)
+=======================================
+Test 1 — Step 3 edits
+
+Change BID from 300 → 308 in Pricing Details
+
+Click Build Scenario
+
+Project Scenario panel must now show 308
+
+Test 2 — Timeline
+
+Proceed to Step 4
+
+Timeline must show 308 hours
+
+Test 3 — XML
+
+Export XML
+
+Workfront Planned Hours must be 308
+(currently shows 300 — will be fixed when above steps are followed)
+
+Test 4 — Re-open Step 3
+
+Refresh page
+
+Both panels must load 308, not revert.

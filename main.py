@@ -12093,7 +12093,7 @@ def convert_excel_to_mspdi(
     start_date_mode: str = "next_monday",
     fixed_start_iso: Optional[str] = None,
     hours_per_day: float = 8.0,
-    calendar_blocks: List[Tuple[str, str]] = [("09:00:00","17:00:00")],  # WORKFRONT-SAFE: Single block
+    calendar_blocks: List[Tuple[str, str]] = [("08:00:00","12:00:00"), ("13:00:00","17:00:00")],
     roles_split_rule: str = "even",
     role_weights: Optional[Dict[str, float]] = None,
     preserve_predecessors: str = "normalize",
@@ -13715,44 +13715,6 @@ def convert_excel_to_mspdi(
         # Generate XML
         project = Element("Project", xmlns="http://schemas.microsoft.com/project")
         
-        # WORKFRONT FIX: Add required MSPDI Project Info header fields BEFORE <Name>
-        # These fields are required for Workfront to properly import the XML file
-        # Without them, Workfront returns "We're not sure why, but we couldn't read the file"
-        SubElement(project, "SaveVersion").text = "9"
-        SubElement(project, "Title").text = (project_name or project_title)
-        SubElement(project, "Author").text = "Agency Project Builder"
-        SubElement(project, "ScheduleFromStart").text = "1"
-        SubElement(project, "FYStartDate").text = "1"
-        SubElement(project, "CriticalSlackLimit").text = "0"
-        SubElement(project, "CurrencyDigits").text = "2"
-        SubElement(project, "CurrencySymbol").text = "$"
-        SubElement(project, "CurrencySymbolPosition").text = "0"
-        SubElement(project, "CalendarUID").text = "1"
-        SubElement(project, "DefaultStartTime").text = "08:00:00"
-        SubElement(project, "DefaultFinishTime").text = "17:00:00"
-        SubElement(project, "MinutesPerDay").text = "480"
-        SubElement(project, "MinutesPerWeek").text = "2400"
-        SubElement(project, "DaysPerMonth").text = "20"
-        SubElement(project, "DefaultTaskType").text = "0"
-        SubElement(project, "DefaultFixedCostAccrual").text = "2"
-        SubElement(project, "DefaultStandardRate").text = "10"
-        SubElement(project, "DefaultOvertimeRate").text = "15"
-        SubElement(project, "DurationFormat").text = "7"
-        SubElement(project, "WorkFormat").text = "2"
-        SubElement(project, "EditableActualCosts").text = "0"
-        SubElement(project, "HonorConstraints").text = "0"
-        SubElement(project, "EarnedValueMethod").text = "0"
-        SubElement(project, "InsertedProjectsLikeSummary").text = "0"
-        SubElement(project, "MultipleCriticalPaths").text = "0"
-        SubElement(project, "NewTasksEffortDriven").text = "0"
-        SubElement(project, "NewTasksEstimated").text = "1"
-        SubElement(project, "SplitsInProgressTasks").text = "0"
-        SubElement(project, "SpreadActualCost").text = "0"
-        SubElement(project, "SpreadPercentComplete").text = "0"
-        SubElement(project, "TaskUpdatesResource").text = "1"
-        SubElement(project, "FiscalYearStart").text = "0"
-        SubElement(project, "WeekStartDay").text = "1"
-        
         # Project info - use explicit project_name if provided, otherwise fall back to derived title
         SubElement(project, "Name").text = (project_name or project_title)
         SubElement(project, "CreationDate").text = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
@@ -13762,8 +13724,15 @@ def convert_excel_to_mspdi(
         SubElement(project, "FinishDate").text = project_finish.strftime("%Y-%m-%dT%H:%M:%S")
         SubElement(project, "CurrentDate").text = project_start.strftime("%Y-%m-%dT%H:%M:%S")
         
-        # Additional project settings
+        # Project header tuning
         SubElement(project, "DefaultCalendarUID").text = "1"
+        SubElement(project, "ScheduleFromStart").text = "1"
+        SubElement(project, "MinutesPerDay").text = "480"
+        SubElement(project, "MinutesPerWeek").text = "2400"
+        SubElement(project, "DaysPerMonth").text = "20"
+        SubElement(project, "DurationFormat").text = "7"
+        SubElement(project, "DefaultStartTime").text = "09:00:00"
+        SubElement(project, "DefaultFinishTime").text = "17:00:00"
         
         # Calendars
         calendars = SubElement(project, "Calendars")
@@ -13790,21 +13759,23 @@ def convert_excel_to_mspdi(
                     SubElement(working_time, "FromTime").text = start_time
                     SubElement(working_time, "ToTime").text = end_time
 
-        # WORKFRONT-SAFE: Skip Resources section entirely
-        # Resources cause import failures - remove them completely
-        # Planned hours stay on tasks via <Work> element
-        print(f"[WORKFRONT-SAFE] Skipping Resources section (no resources exported)")
+        # Resources
+        resources_elem = SubElement(project, "Resources")
+        for res in resources:
+            resource = SubElement(resources_elem, "Resource")
+            SubElement(resource, "UID").text = str(res["UID"])
+            SubElement(resource, "ID").text = str(res["ID"])
+            SubElement(resource, "Name").text = res["Name"]
+            SubElement(resource, "Type").text = "1"  # Work resource
+            # Add StandardRate for pricing
+            role = res.get("Name", "Unassigned")
+            rate = _std_rate_for(role, pricing_mode, rate_band, blended_rate, DB)
+            SubElement(resource, "StandardRate").text = f"{rate:.2f}"
 
-        # WORKFRONT-SAFE COSTTYPE HELPER: Apply FixedCost ONLY to summary/deliverable tasks
-        # Leaf tasks should only have CostType=0 (no FixedCost fields) for clean Workfront import
-        def apply_costtype_and_fixedcost(task_elem, row_dict, task_name="", is_summary_task=False):
-            # WORKFRONT-SAFE: Only apply FixedCost to summary/deliverable tasks
-            # Leaf tasks always get CostType=0 with NO FixedCost fields
-            if not is_summary_task:
-                SubElement(task_elem, "CostType").text = "0"  # Role Hourly (default for leaves)
-                return
-            
-            # Summary/deliverable tasks: Apply FixedCost if present
+        # HYBRID COSTTYPE HELPER: Apply CostType based on FixedCost for ALL task types
+        # This ensures monthly retainer children, deliverables, and all tasks get proper cost handling
+        def apply_costtype_and_fixedcost(task_elem, row_dict, task_name=""):
+            # Check multiple field names for price (Step 3 uses price_usd, export prep may use FixedCost)
             fixed_cost = float(
                 row_dict.get("FixedCost") or
                 row_dict.get("Price_USD") or
@@ -13840,91 +13811,56 @@ def convert_excel_to_mspdi(
                 first_l2_deliverable_uid = l2_candidates[0]["uid"]
                 print(f"[TIGHT WATERFALL] 🎯 First L2 deliverable UID={first_l2_deliverable_uid} (WBS {l2_candidates[0]['wbs']}) will use SNET constraint")
 
-        # WORKFRONT-SAFE FIX: Build reliable parent WBS set from rows data
-        # This avoids issues with summary_set being UID-based after remapping
-        parent_wbs_set = set()
-        for row in rows:
-            parent_wbs = row.get("ParentWBS")
-            if parent_wbs:
-                parent_wbs_set.add(parent_wbs)
-        print(f"[XML EXPORT] Built parent_wbs_set with {len(parent_wbs_set)} parents for Summary flag")
-        
-        # Tasks - WORKFRONT-SAFE EXPORT MODE
-        # Rules:
-        # - Summary tasks: Summary=1, Work=PT0M, Duration=PT0M, NO Start/Finish/Constraints
-        # - Leaf tasks: Keep Start/Finish/Duration, snap times to 09:00/17:00
+        # Tasks
         tasks_elem = SubElement(project, "Tasks")
         for task_id, r in enumerate(rows, 1):
             task = SubElement(tasks_elem, "Task")
             SubElement(task, "UID").text = str(r["UID"])
             SubElement(task, "ID").text = str(task_id)
-            
+            # Use "Project Summary" for root task, otherwise use the actual name
             is_root = r["WBS"] == "1"
             name_txt = "Project Summary" if is_root else r["Name"]
             SubElement(task, "Name").text = name_txt
             
+            # IMPORTANT: Keep full WBS paths for uniqueness, only OutlineLevel is capped
+            # Workfront needs full WBS (e.g., "1.2.3.1.1") for unique task identification
+            # But OutlineLevel is capped at 3 for visual hierarchy (Deliverable → Component → Task)
             SubElement(task, "WBS").text = r["WBS"]
             SubElement(task, "OutlineNumber").text = r["WBS"] 
+            SubElement(task, "Start").text = uid_to_sched[r["UID"]]["Start"]
+            SubElement(task, "Finish").text = uid_to_sched[r["UID"]]["Finish"]
             
-            outline_level = r["WBS"].count(".") + 1
+            # Calculate outline level EARLY (needed for deliverable detection)
+            outline_level = r["WBS"].count(".") + 1  # 1 for '1', 2 for '1.1', etc.
             SubElement(task, "OutlineLevel").text = str(outline_level)
             
-            # Determine if this is a summary task (has children)
-            has_children = r["WBS"] in parent_wbs_set
-            is_summary = has_children or is_root
-            
+            # GPT-5 PRO FIX: Make deliverable/summary mutually exclusive to prevent duplicate ConstraintType tags
+            # WATERFALL FIX: Deliverables are now OutlineLevel=2 (direct children of Project Summary)
+            is_deliverable = outline_level == 2 and not is_root
+            is_summary = (r["WBS"] in summary_set or is_root) and not is_deliverable
             SubElement(task, "Summary").text = "1" if is_summary else "0"
-            SubElement(task, "DurationFormat").text = "7"  # Always auto-scheduled
             
-            if is_summary:
-                # WORKFRONT-SAFE: Summary tasks have NO Start/Finish/Constraints
-                # Workfront will calculate these from children
+            # GPT-5 PRO FIX: Conditional DurationFormat based on manual scheduling
+            # TIGHT_WATERFALL: Deliverables use DurationFormat=7 (auto-scheduled) when enabled
+            # Legacy: 53 (Elapsed Days + Manual) for manually scheduled tasks
+            # 7 (Elapsed Days) for auto-scheduled tasks (root, leaf, and deliverables in tight waterfall mode)
+            if TIGHT_WATERFALL_ENABLED and is_deliverable:
+                # TIGHT WATERFALL: Deliverables are auto-scheduled with ASAP constraint
+                is_manually_scheduled = False
+            else:
+                is_manually_scheduled = is_deliverable or (is_summary and not is_root)
+            SubElement(task, "DurationFormat").text = "53" if is_manually_scheduled else "7"
+            
+            # GPT-5 PRO FIX: Reordered branches to prevent overlap (root → deliverable → summary → leaf)
+            if is_root:
+                # ROOT TASK (OutlineLevel=1): PT0M duration, no Manual* tags
                 SubElement(task, "Work").text = "PT0M"
                 SubElement(task, "Duration").text = "PT0M"
-                # DO NOT set Start, Finish, ConstraintType, or ConstraintDate for summary tasks
-                print(f"[WORKFRONT-SAFE] Summary task (no dates): {name_txt[:40]} (WBS {r['WBS']})")
+                SubElement(task, "ConstraintType").text = "4"  # Must Start On
+                SubElement(task, "ConstraintDate").text = uid_to_sched[r["UID"]]["Start"]
+                # Root does NOT get Manual* tags or Type/IsEffortDriven per GPT-5 Pro spec
             
-            else:
-                # LEAF TASK: Has Start, Finish, Duration
-                # Snap times to working hours: Start=09:00:00, Finish=17:00:00
-                start_str = uid_to_sched[r["UID"]]["Start"]
-                finish_str = uid_to_sched[r["UID"]]["Finish"]
-                
-                # Parse dates and snap to working hours
-                try:
-                    start_dt = datetime.datetime.fromisoformat(start_str.replace('Z', ''))
-                    finish_dt = datetime.datetime.fromisoformat(finish_str.replace('Z', ''))
-                except:
-                    start_dt = project_start
-                    finish_dt = project_start + datetime.timedelta(days=1)
-                
-                # WORKFRONT-SAFE: Snap to working hours
-                snapped_start = start_dt.strftime("%Y-%m-%dT09:00:00")
-                snapped_finish = finish_dt.strftime("%Y-%m-%dT17:00:00")
-                
-                SubElement(task, "Start").text = snapped_start
-                SubElement(task, "Finish").text = snapped_finish
-                
-                # Calculate Duration = business_days_between(Start, Finish) × 480
-                duration_days = calculate_business_days_between(start_dt.date(), finish_dt.date())
-                duration_days = max(1, duration_days)  # Minimum 1 day
-                duration_minutes = duration_days * 480  # 8-hour workday
-                SubElement(task, "Duration").text = f"PT{duration_minutes}M"
-                
-                # Work = PlannedHours from Gantt
-                work_hours = uid_to_sched[r['UID']].get('PlannedHours', 0)
-                if pd.isna(work_hours):
-                    work_hours = 0
-                work_minutes = max(0, int(work_hours * 60))
-                SubElement(task, "Work").text = f"PT{work_minutes}M"
-                
-                print(f"[WORKFRONT-SAFE] Leaf task: {name_txt[:40]} Start={snapped_start[:10]} Finish={snapped_finish[:10]} Dur={duration_days}d Work={work_hours}h")
-            
-            # Skip remaining complex branching - simplified for Workfront-Safe export
-            continue  # Move to next task
-            
-            # === LEGACY CODE BELOW - SKIPPED ===
-            if False and is_deliverable:
+            elif is_deliverable:
                 # DELIVERABLE TASKS (OutlineLevel=2)
                 # TIGHT WATERFALL: ASAP constraint, no Manual* tags, FS chain (built later)
                 # LEGACY: SNET constraint + Manual* tags if has children
@@ -13969,6 +13905,7 @@ def convert_excel_to_mspdi(
                     # FS chain between deliverables is built after all tasks are created
                     SubElement(task, "Type").text = "1"  # Fixed Duration
                     SubElement(task, "IsEffortDriven").text = "0"
+                    SubElement(task, "ManuallyScheduled").text = "0"  # Explicit auto-scheduling
                     
                     # TASK 2: First deliverable gets SNET (start gate), others get ASAP
                     if r["UID"] == first_l2_deliverable_uid:
@@ -13990,9 +13927,14 @@ def convert_excel_to_mspdi(
                         SubElement(task, "ConstraintType").text = "0"  # As Soon As Possible
                         print(f"[TIGHT WATERFALL] ⛓️ Deliverable with ASAP constraint: {name_txt} (WBS {r['WBS']})")
                 else:
-                    # LEGACY MODE: Auto-scheduled for Workfront compatibility
+                    # LEGACY MODE: Manual Scheduling tags to lock parent timelines
                     SubElement(task, "Type").text = "1"  # Fixed Duration
                     SubElement(task, "IsEffortDriven").text = "0"
+                    SubElement(task, "ManuallyScheduled").text = "1"
+                    SubElement(task, "ManualStart").text = "1"
+                    SubElement(task, "ManualFinish").text = "1"
+                    SubElement(task, "ManualDuration").text = "1"
+                    SubElement(task, "ManualWork").text = "1"
                     
                     # SNET constraint to lock deliverable start date
                     start_date_str = uid_to_sched[r["UID"]]["Start"]
@@ -14025,9 +13967,15 @@ def convert_excel_to_mspdi(
                     # Fallback to 1 day
                     SubElement(task, "Duration").text = "PT480M"
                 
-                # WORKFRONT FIX: Remove Manual* tags for import compatibility
+                # GPT-5 PRO SPEC: Summary tasks (OutlineLevel 2-5) need Type, IsEffortDriven, and Manual Scheduling tags
+                # These lock parent timelines and prevent Workfront from recalculating rolled-up dates
                 SubElement(task, "Type").text = "1"  # Fixed Duration
                 SubElement(task, "IsEffortDriven").text = "0"
+                SubElement(task, "ManuallyScheduled").text = "1"
+                SubElement(task, "ManualStart").text = "1"
+                SubElement(task, "ManualFinish").text = "1"
+                SubElement(task, "ManualDuration").text = "1"
+                SubElement(task, "ManualWork").text = "1"
             # Only set Duration/Work for non-summary leaf tasks
             else:
                 # WORKFRONT FIX: Duration MUST equal (Finish - Start) for ALL tasks
@@ -14074,27 +14022,19 @@ def convert_excel_to_mspdi(
                 
                 SubElement(task, "Work").text = f"PT{work_minutes}M"
                 
-                # WORKFRONT DURATION FIX: Duration MUST equal business-day span between Start/Finish
-                # This prevents Workfront from recalculating dates on import
-                # The previous ceil(hours/8) logic caused Workfront to compress timelines
+                # DURATION FIX: Ensure Work ≤ Duration using ceil(hours/8) formula
+                # This fixes "11 hours in 0.12 days" issue by guaranteeing sufficient duration
+                work_hours = work_minutes / 60.0
                 
-                # Convert to dates for business day calculation
-                start_date = start_dt.date()
-                finish_date = finish_dt.date()
-                
-                # Calculate business days (Mon-Fri) between start and finish
-                duration_days = calculate_business_days_between(start_date, finish_date)
-                
-                # Safety: If duration is 0 or negative but there's work, force 1 day minimum
-                if duration_days <= 0 and work_minutes > 0:
-                    duration_days = 1
-                
-                # True milestone: zero duration when no work AND zero span
-                if duration_days <= 0 and work_minutes == 0:
+                if work_hours == 0:
+                    # Milestone: zero duration
                     dur_minutes = 0
                 else:
-                    # Business days × 8 hours × 60 minutes = PT{dur}M
-                    dur_minutes = duration_days * 480
+                    # Regular task: required_days = max(1, ceil(hours / 8.0))
+                    # Uses 8-hour workday aligned with MinutesPerDay=480
+                    import math
+                    required_days = max(1, math.ceil(work_hours / 8.0))
+                    dur_minutes = required_days * 480
                 
                 SubElement(task, "Duration").text = f"PT{dur_minutes}M"
                 
@@ -14116,10 +14056,9 @@ def convert_excel_to_mspdi(
             is_anchor = str(r.get("WBS", "")).startswith("ANCHOR_")
             SubElement(task, "Milestone").text = "1" if is_anchor else "0"
             
-            # WORKFRONT-SAFE COSTTYPE: Only apply FixedCost to summary/deliverable tasks
-            # Leaf tasks get CostType=0 with no FixedCost fields for clean Workfront import
-            is_summary_for_cost = has_children or is_summary or is_deliverable
-            apply_costtype_and_fixedcost(task, r, name_txt, is_summary_task=is_summary_for_cost)
+            # UNIVERSAL COSTTYPE: Apply hybrid CostType logic to ALL tasks (deliverables, summaries, leaves, monthly children)
+            # This ensures any task with FixedCost > 0 gets CostType=2, all others get CostType=0 (Role Hourly)
+            apply_costtype_and_fixedcost(task, r, name_txt)
 
         # WORKFRONT FIX: Add finish anchor milestones for preserved DELIVERABLES
         # This locks the deliverable's finish date by creating a zero-duration milestone
@@ -14244,10 +14183,128 @@ def convert_excel_to_mspdi(
                 
                 print(f"[XML EXPORT] ⚓ Created finish anchor for deliverable: {r['Name']} (WBS {r['WBS']}) → Last leaf: {last_leaf['Name']} (UID {last_leaf['UID']}, WBS {last_leaf['WBS']}), Finish={finish_date})")
 
-        # WORKFRONT-SAFE: Skip Assignments section entirely
-        # Assignments cause import failures - remove them completely
-        # Planned hours stay on tasks via <Work> element
-        print(f"[WORKFRONT-SAFE] Skipping Assignments section (no assignments exported)")
+        # Assignments
+        # CRITICAL FIX: Filter out assignments for summary/parent tasks
+        # Summary tasks should have NO assignments - Workfront will roll up from children
+        # Build set of summary task UIDs by checking which tasks have children
+        summary_task_uids = set()
+        wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
+        for parent_wbs in children_by_parent.keys():
+            if parent_wbs in wbs_to_uid:
+                summary_task_uids.add(wbs_to_uid[parent_wbs])
+        # Also add root task
+        if "1" in wbs_to_uid:
+            summary_task_uids.add(wbs_to_uid["1"])
+        
+        assignments_elem = SubElement(project, "Assignments")
+        
+        # BACKWARD COMPATIBILITY: Build deliverable FixedCost lookup
+        # Only zero assignment costs when parent deliverable has FixedCost > 0
+        deliverable_fixed_costs = {}
+        for r in rows:
+            outline_level = r["WBS"].count(".") + 1
+            if outline_level == 2:  # Deliverable level
+                fixed_cost = float(r.get("FixedCost", 0))
+                deliverable_fixed_costs[r["WBS"]] = fixed_cost
+        
+        def get_deliverable_wbs(wbs):
+            """Get the L2 deliverable WBS for any task WBS."""
+            parts = wbs.split(".")
+            if len(parts) >= 2:
+                return ".".join(parts[:2])  # L2 = "1.2"
+            return wbs
+        
+        # Build assignments for all tasks (including multi-assignment merged tasks)
+        assign_uid_counter = 1
+        for row in rows:
+            task_uid = row["UID"]
+            
+            # Skip assignments that reference summary/parent tasks
+            if task_uid in summary_task_uids:
+                print(f"[XML EXPORT] 🚫 Skipping assignment for summary task UID {task_uid} (summary tasks should have no assignments)")
+                continue
+            
+            # Check if this is a multi-assignment merged task
+            if row.get("multi_assignment") and "assignments" in row:
+                # Multi-assignment task - create multiple Assignment elements
+                for assign_data in row["assignments"]:
+                    assignment = SubElement(assignments_elem, "Assignment")
+                    SubElement(assignment, "UID").text = str(assign_uid_counter)
+                    assign_uid_counter += 1
+                    
+                    SubElement(assignment, "TaskUID").text = str(task_uid)
+                    
+                    # Find resource UID for this role
+                    resource_name = assign_data["resource_name"]
+                    res_uid = res_name_to_uid.get(resource_name) or res_name_to_uid.get("Unassigned")
+                    SubElement(assignment, "ResourceUID").text = str(res_uid)
+                    
+                    SubElement(assignment, "Start").text = uid_to_sched[task_uid]["Start"]
+                    SubElement(assignment, "Finish").text = uid_to_sched[task_uid]["Finish"]
+                    
+                    # Compute Units and Work
+                    work_hours = assign_data["work_hours"]
+                    work_min = work_hours * 60
+                    dur_hours = uid_to_sched[task_uid].get('DurationHours', 0)
+                    dur_min = dur_hours * 60
+                    # Use actual duration for accurate Units calculation (no 480-minute rounding)
+                    units = 0 if dur_min == 0 else work_min / dur_min
+                    
+                    SubElement(assignment, "Units").text = str(units)
+                    SubElement(assignment, "Work").text = f"PT{int(work_min)}M"
+                    
+                    # BACKWARD COMPATIBILITY: Zero cost only if parent deliverable has FixedCost
+                    # Otherwise, use hourly rate calculation (legacy behavior)
+                    deliv_wbs = get_deliverable_wbs(row.get("WBS", ""))
+                    parent_fixed_cost = deliverable_fixed_costs.get(deliv_wbs, 0)
+                    if parent_fixed_cost > 0:
+                        SubElement(assignment, "Cost").text = "0.00"
+                    else:
+                        # Fallback to hourly calculation
+                        rate = _std_rate_for(resource_name, pricing_mode, rate_band, blended_rate, DB)
+                        cost = work_hours * rate
+                        SubElement(assignment, "Cost").text = f"{cost:.2f}"
+                    
+                print(f"[XML EXPORT] 👥 Created {len(row['assignments'])} assignments for multi-assignment task: {row['Name'][:50]} (UID {task_uid})")
+            else:
+                # Single-assignment task - use original logic
+                # Find the assignment for this task from the pre-built assignments list
+                task_assignments = [a for a in assignments if a["TaskUID"] == task_uid]
+                
+                for assign in task_assignments:
+                    assignment = SubElement(assignments_elem, "Assignment")
+                    SubElement(assignment, "UID").text = str(assign_uid_counter)
+                    assign_uid_counter += 1
+                    
+                    SubElement(assignment, "TaskUID").text = str(task_uid)
+                    res_uid = assign["ResourceUID"]
+                    SubElement(assignment, "ResourceUID").text = str(res_uid)
+                    SubElement(assignment, "Start").text = assign["Start"]
+                    SubElement(assignment, "Finish").text = assign["Finish"]
+                    
+                    # Compute Units = work_min / dur_min for Fixed Duration tasks
+                    work_hours = assign['WorkHours']
+                    work_min = work_hours * 60
+                    dur_hours = uid_to_sched[task_uid].get('DurationHours', 0)
+                    dur_min = dur_hours * 60
+                    # Use actual duration for accurate Units calculation (no 480-minute rounding)
+                    units = 0 if dur_min == 0 else work_min / dur_min
+                    
+                    SubElement(assignment, "Units").text = str(units)
+                    SubElement(assignment, "Work").text = f"PT{int(work_min)}M"
+                    
+                    # BACKWARD COMPATIBILITY: Zero cost only if parent deliverable has FixedCost
+                    # Otherwise, use hourly rate calculation (legacy behavior)
+                    deliv_wbs = get_deliverable_wbs(row.get("WBS", ""))
+                    parent_fixed_cost = deliverable_fixed_costs.get(deliv_wbs, 0)
+                    if parent_fixed_cost > 0:
+                        SubElement(assignment, "Cost").text = "0.00"
+                    else:
+                        # Fallback to hourly calculation
+                        res_name = next((r["Name"] for r in resources if r["UID"] == res_uid), "Unassigned")
+                        rate = _std_rate_for(res_name, pricing_mode, rate_band, blended_rate, DB)
+                        cost = work_hours * rate
+                        SubElement(assignment, "Cost").text = f"{cost:.2f}"
 
         # WORKFRONT FIX: Add PredecessorLinks for:
         # 1. Deliverable-level dependencies (OutlineLevel ≤4 to ≤4)
@@ -14747,10 +14804,59 @@ def convert_excel_to_mspdi(
         else:
             print(f"[VALIDATION] ⚠️  Found {leaf_constraint_issues} leaf tasks without ASAP constraint")
         
-        # Validation 6: SKIPPED - Manual Scheduling tags removed for Workfront import compatibility
-        # Manual* tags (ManuallyScheduled, ManualStart, ManualFinish, ManualDuration, ManualWork)
-        # cause Workfront to reject the file with "couldn't read the file" error
-        print(f"[VALIDATION] ✅ Manual Scheduling tags removed for Workfront compatibility: PASS")
+        # Validation 6: Check all non-root summary tasks have Manual Scheduling tags (GPT-5 Pro spec)
+        manual_tag_issues = 0
+        root_has_manual_tags = False
+        for task_elem in tasks_elem.findall("Task"):
+            summary_elem = task_elem.find("Summary")
+            wbs_elem = task_elem.find("WBS")
+            
+            # Check if this is the root task (WBS="1" is always the project root)
+            is_root_task = wbs_elem is not None and wbs_elem.text == "1"
+            
+            # Check if this is a summary task (has children)
+            if summary_elem is not None and summary_elem.text == "1":
+                # Check for Manual* tags
+                manual_scheduled = task_elem.find("ManuallyScheduled")
+                manual_start = task_elem.find("ManualStart")
+                manual_finish = task_elem.find("ManualFinish")
+                manual_duration = task_elem.find("ManualDuration")
+                manual_work = task_elem.find("ManualWork")
+                
+                # Root should NOT have Manual* tags
+                if is_root_task:
+                    if any([manual_scheduled is not None, manual_start is not None, 
+                           manual_finish is not None, manual_duration is not None, manual_work is not None]):
+                        print(f"[VALIDATION] ❌ Root task should NOT have Manual* tags")
+                        root_has_manual_tags = True
+                else:
+                    # Non-root summaries MUST have Manual* tags
+                    missing_tags = []
+                    if manual_scheduled is None or manual_scheduled.text != "1":
+                        missing_tags.append("ManuallyScheduled")
+                    if manual_start is None or manual_start.text != "1":
+                        missing_tags.append("ManualStart")
+                    if manual_finish is None or manual_finish.text != "1":
+                        missing_tags.append("ManualFinish")
+                    if manual_duration is None or manual_duration.text != "1":
+                        missing_tags.append("ManualDuration")
+                    if manual_work is None or manual_work.text != "1":
+                        missing_tags.append("ManualWork")
+                    
+                    if missing_tags:
+                        name_elem = task_elem.find("Name")
+                        task_name = name_elem.text if name_elem is not None else "Unknown"
+                        if manual_tag_issues < 3:  # Only show first 3
+                            print(f"[VALIDATION] ❌ Summary task missing Manual tags: {task_name[:40]} (missing: {', '.join(missing_tags)})")
+                        manual_tag_issues += 1
+        
+        if manual_tag_issues == 0 and not root_has_manual_tags:
+            print(f"[VALIDATION] ✅ All non-root summary tasks have Manual Scheduling tags, root excluded: PASS")
+        else:
+            if manual_tag_issues > 0:
+                print(f"[VALIDATION] ❌ Found {manual_tag_issues} summary tasks missing Manual* tags")
+            if root_has_manual_tags:
+                print(f"[VALIDATION] ❌ Root task incorrectly has Manual* tags")
         
         # Validation 7: Verify DurationFormat=7 globally (not 5)
         wrong_duration_format = 0
@@ -14835,12 +14941,6 @@ def convert_excel_to_mspdi(
             
             # Remove extra blank lines that toprettyxml adds
             lines = [line for line in pretty_xml.split('\n') if line.strip()]
-            
-            # WORKFRONT FIX: Replace XML declaration with proper encoding and standalone
-            # Workfront requires: <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-            if lines and lines[0].startswith('<?xml'):
-                lines[0] = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-            
             final_xml = '\n'.join(lines)
             
             with open(output_xml, 'w', encoding='utf-8') as f:
@@ -14850,10 +14950,8 @@ def convert_excel_to_mspdi(
         except Exception as e:
             # Fallback: write raw XML if pretty printing fails
             print(f"[XML] Pretty print failed, using raw XML: {e}")
-            # WORKFRONT FIX: Still add proper XML declaration for fallback path
-            xml_decl = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
             with open(output_xml, 'w', encoding='utf-8') as f:
-                f.write(xml_decl + xml_string)
+                f.write(xml_string)
                 f.flush()
                 os.fsync(f.fileno())
 

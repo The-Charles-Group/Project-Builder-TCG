@@ -1,0 +1,142 @@
+3. Copy‑paste instructions for Replit Agent + Architect
+
+You can send them something like this (feel free to paste as‑is):
+
+Goal
+
+Fix the MSPDI export so that:
+
+L2 deliverables form a simple, acyclic FS chain (tight waterfall).
+
+Workfront can import the XML without errors.
+
+No “work‑wait‑work‑wait” gaps are introduced from constraints or dependencies.
+
+Files involved
+
+main.py – convert_excel_to_mspdi()
+
+ai_schedule_postprocess.py – compress_deliverable_timeline() (already good)
+
+Anything you added for the “L2‑only FS chain” logic
+
+A. Clean all existing deliverable‑level predecessors before chaining
+
+Inside convert_excel_to_mspdi() (or wherever you build <Tasks> and <PredecessorLink>):
+
+Collect all L2 deliverables after rows is built:
+
+deliverable_rows = [r for r in rows if r["WBS"].count(".") + 1 == 2 and r["WBS"] != "1"]
+deliverable_uids = {r["UID"] for r in deliverable_rows}
+
+
+When emitting tasks, for any L2 deliverable task, do not carry over any existing dependencies that point to other deliverables.
+
+If you currently derive predecessors from something like r["dependencies"], do:
+
+original_deps = parse_dependencies(r.get("dependencies", ""))
+
+# Drop any dependencies that point at other deliverables
+filtered_deps = [
+    dep for dep in original_deps
+    if dep.predecessor_uid not in deliverable_uids
+]
+# Use filtered_deps when creating <PredecessorLink> elements
+
+
+or, if you already emitted <PredecessorLink> elements earlier, run a clean‑up pass on the XML tree:
+
+# pseudo-code after <Tasks> is built
+deliverable_uid_set = set(deliverable_uids)
+
+for task in project.findall("Tasks/Task"):
+    uid = int(task.findtext("UID", "0"))
+    outline = int(task.findtext("OutlineLevel", "0") or 0)
+
+    if outline == 2:
+        # remove any PredecessorLink whose PredecessorUID is another deliverable
+        for pl in list(task.findall("PredecessorLink")):
+            pred_uid = int(pl.findtext("PredecessorUID", "0") or 0)
+            if pred_uid in deliverable_uid_set:
+                task.remove(pl)
+
+
+Key point: After this step, no L2 deliverable should have any PredecessorLink to another L2 deliverable.
+
+B. Rebuild a clean L2 FS chain
+
+Now add a second pass that builds the tight waterfall chain:
+
+# 1. Get the deliverables in chronological / WBS order
+deliverable_tasks = []
+task_by_uid = {}
+
+for task in project.findall("Tasks/Task"):
+    uid = int(task.findtext("UID", "0") or 0)
+    outline = int(task.findtext("OutlineLevel", "0") or 0)
+    if outline == 2:
+        deliverable_tasks.append(task)
+    task_by_uid[uid] = task
+
+# sort by WBS or Start date — whichever is currently used
+deliverable_tasks.sort(
+    key=lambda t: t.findtext("WBS") or t.findtext("Start")
+)
+
+# 2. Add exactly one FS predecessor per deliverable after the first
+for prev_task, curr_task in zip(deliverable_tasks, deliverable_tasks[1:]):
+    prev_uid = int(prev_task.findtext("UID", "0") or 0)
+
+    pl = SubElement(curr_task, "PredecessorLink")
+    SubElement(pl, "PredecessorUID").text = str(prev_uid)
+    SubElement(pl, "Type").text = "1"          # 1 = Finish-to-Start
+    SubElement(pl, "CrossProject").text = "0"
+    SubElement(pl, "LinkLag").text = "0"
+    SubElement(pl, "LagFormat").text = "7"     # Same as existing links
+
+
+Rules:
+
+First deliverable: no PredecessorLink.
+
+Each later deliverable: exactly one PredecessorLink, pointing to the immediately previous deliverable in that sorted list.
+
+Do not add additional links between deliverables (no second “extra” predecessor).
+
+C. Keep constraints simple for L2 deliverables
+
+For L2 tasks only:
+
+ConstraintType should stay 0 (ASAP).
+
+ManuallyScheduled = 0.
+
+No ManualStart / ManualFinish tags necessary.
+
+Root task still uses ConstraintType = 4 with the project start date.
+
+Milestones (Strategy Approval, Creative Approval, Launch Complete) should not be part of this chain; keep whatever constraint logic they currently have.
+
+D. Safety checks (Replit side)
+
+Ask them to add a tiny sanity check before writing the XML:
+
+# Sanity check: no cycles among deliverables
+deliverable_graph = {uid: [] for uid in deliverable_uid_set}
+
+for task in project.findall("Tasks/Task"):
+    uid = int(task.findtext("UID", "0") or 0)
+    outline = int(task.findtext("OutlineLevel", "0") or 0)
+    if outline != 2:
+        continue
+    for pl in task.findall("PredecessorLink"):
+        pred_uid = int(pl.findtext("PredecessorUID", "0") or 0)
+        if pred_uid in deliverable_graph:
+            deliverable_graph[uid].append(pred_uid)
+
+# simple cycle detection or: assert each deliverable has <=1 deliverable predecessor
+for uid, preds in deliverable_graph.items():
+    assert len(preds) <= 1, f"Deliverable UID {uid} has multiple deliverable predecessors: {preds}"
+
+
+If that assertion ever fires, log it and skip exporting until it’s fixed.

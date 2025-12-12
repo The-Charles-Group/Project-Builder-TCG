@@ -1,0 +1,111 @@
+What you should tell Replit Agent + Architect
+
+Here’s a concrete, copy‑paste brief you can give them.
+
+Goal:
+In Workfront, L2 deliverables should appear as a clean end‑to‑start waterfall (no work–wait–work–wait between them, aside from weekends/holidays). Child tasks (components + detailed tasks) should only have dependencies inside their own deliverable. Step 4 Gantt and the XML export must use the same compressed schedule.
+
+1. Make compress_deliverable_timeline() the single source of truth
+
+Files: ai_schedule_postprocess.py, timeline_scheduler.py, main.py
+
+When Step 4 generates a timeline, it already calls compress_deliverable_timeline() and stores the result into scenario['timeline'].
+
+For export, convert_excel_to_mspdi() must build uid_to_sched from this compressed timeline instead of re‑deriving dates from raw Start_Offset_Days / baseline schedule.
+
+Implementation notes for them:
+
+Determine the “active schedule” for the session (optimized vs baseline) as already handled in the optimizer code.
+
+For each row r produced in the WBS-building stage, compute its Start/Finish by:
+
+Finding its parent deliverable in scenario['timeline']
+
+Using that deliverable’s Start_Offset_Days / Start_Date from compress_deliverable_timeline()
+
+Adding the intra‑deliverable offset already encoded in Duration_Days / Start_Offset_Days for the task.
+
+Populate uid_to_sched[UID]['Start'] and ['Finish'] from this compressed schedule and use those values when writing <Start> and <Finish> in the XML.
+
+That ensures Step 4 PDFs and the XML export show the same dates.
+
+2. Enforce a clean L2 deliverable FS chain
+
+File: main.py (inside convert_excel_to_mspdi() after all <Task> elements are created)
+
+Build a list of L2 deliverables:
+
+l2_delivs = [t for t in all_tasks if t.outline_level == 2 and not t.is_root and not t.is_milestone]
+l2_delivs.sort(key=lambda t: t.start_date)  # or WBS order
+
+
+For each deliverable in that sorted list:
+
+Set:
+
+ConstraintType = 0    <!-- ASAP -->
+ManuallyScheduled = 0
+
+
+(Except any explicit “project kick‑off” gating you decide to keep for the first deliverable.)
+
+For the first deliverable:
+
+Either leave it with no predecessors, or (if you want a hard start gate) give it ConstraintType=5 (Start No Earlier Than) with ConstraintDate = project_start.
+
+For every subsequent deliverable:
+
+Create exactly one <PredecessorLink>:
+
+<PredecessorLink>
+  <PredecessorUID>UID_of_previous_L2</PredecessorUID>
+  <Type>1</Type>           <!-- Finish-to-Start -->
+  <CrossProject>0</CrossProject>
+  <LinkLag>0</LinkLag>
+  <LagFormat>7</LagFormat> <!-- elapsed days -->
+</PredecessorLink>
+
+
+Do not add predecessors to L2 milestones (Strategy Approval, Creative Approval, Launch Complete, etc.). Those should keep whatever constraints they already have.
+
+This implements the “L2‑only FS chain” the architect described.
+
+3. Keep child‑task dependencies inside their deliverable
+
+Files: timeline_scheduler.py / the module that builds normalized_edges → export
+
+The Architect review flagged this gap as: “Child tasks stay internal – cross‑deliverable predecessors not filtered.”
+
+Ask them to:
+
+Build a mapping from each task UID to its root deliverable UID using WBS:
+
+The deliverable key is the first two segments of WBS ('1.3' from '1.3.2.1' etc) mapped to the L2 task’s UID.
+
+When converting normalized_edges into <PredecessorLink> elements:
+
+For any edge where both tasks are OutlineLevel ≥ 3:
+
+Only keep the edge if root_deliverable(predecessor) == root_deliverable(successor).
+
+Drop edges where they belong to different deliverables (unless the predecessor is a named milestone you explicitly whitelist).
+
+Preserve intra‑deliverable chains (component → task → task) so each deliverable still has a realistic internal flow, but you no longer get spaghetti arrows crossing from, say, “Paid Media Strategy” into “Brand Style & Usage Guidelines.”
+
+Result: in Workfront’s Gantt, collapsed to deliverables, you’ll see a clean waterfall with arrows mainly travelling from one L2 bar to the next.
+
+4. Make Step 4 and XML export visually consistent
+
+Once steps 1–3 are done:
+
+Step 4 will already be using the compressed schedule for display (no gaps).
+
+Export will be using the same compressed dates (via the shared uid_to_sched source).
+
+If you want Step 4 to actually show arrows between deliverables too, they can:
+
+After compression, reconstruct a simple deliverable chain in the timeline JSON: for each deliverable tasks[i] set dependencies to the task_id of tasks[i-1].
+
+Keep child task dependencies empty in the UI so you don’t clutter the Gantt.
+
+But even if you leave Step 4 with no arrows, the dates you see in the app and the schedule you get in Workfront will match.

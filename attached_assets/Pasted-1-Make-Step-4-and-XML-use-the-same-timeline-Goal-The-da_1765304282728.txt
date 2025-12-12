@@ -1,0 +1,188 @@
+1️⃣ Make Step 4 and XML use the same timeline
+
+Goal: The dates you see in the Step 4 Gantt / PDFs must be the exact dates emitted into the MSPDI XML.
+
+Instructions for Replit:
+
+Declare a single “authoritative timeline” structure (e.g. CompressedDeliverableSchedule) produced by compress_deliverable_timeline().
+That structure should contain, at minimum, for each L2 deliverable row:
+
+deliverable_id / row_id
+
+start_date (compressed)
+
+finish_date (compressed)
+
+duration_days (business days @ 8h/d)
+
+Use that structure in two places:
+
+Step 4 Gantt + PDFs – already wired to compress_deliverable_timeline(); leave this as‑is.
+
+XML export (convert_excel_to_mspdi) – instead of recomputing dates from raw scenario rows, look up each L2 row’s start/finish in CompressedDeliverableSchedule and use those values as <Start> and <Finish> on the L2 tasks in the MSPDI.
+
+In other words: XML must not recompute its own schedule; it must read the compressed schedule.
+
+If no compressed schedule exists (older scenarios, legacy paths), fall back to the current behavior, but behind a feature flag, e.g.:
+
+ENABLE_TIGHT_WATERFALL = True
+
+
+Then you can flip it off if something goes wrong without reverting code.
+
+2️⃣ Build a clean L2 → L2 waterfall chain
+
+Right now the XML still reflects “Must Start On” and manual scheduling for L2s in some exports, which forces Workfront to obey fixed dates instead of the chain. Example from one of the St. Regis files: <ManuallyScheduled>1</ManuallyScheduled> with <ConstraintType>2</ConstraintType> (= Must Start On).
+
+Desired behavior:
+
+Deliverables form a single, straight FS chain:
+L2[1] → L2[2] → L2[3] → …
+
+First deliverable starts on the project start (or kickoff gate).
+
+All other deliverables start ASAP after the previous L2 finishes.
+
+Instructions for Replit:
+
+For L2 tasks only (OutlineLevel == 2, non‑milestone):
+
+ConstraintType = 0 (ASAP)
+
+ManuallyScheduled = 0
+
+Remove ManualStart/ManualFinish/ManualDuration/ManualWork fields.
+
+Exception: first L2 deliverable.
+
+If you want a hard kickoff, allow:
+
+ConstraintType = 2 (Must Start On) with ConstraintDate = project_start
+
+All other L2s must be ASAP.
+
+Build explicit FS chain between L2s:
+
+After you’ve stripped dependencies, take the list of L2 tasks in desired order (same order as Step 4 / compressed schedule) and for each pair:
+
+For current L2 (except the very first):
+
+Add a <PredecessorLink> block with:
+
+PredecessorUID = UID of previous L2
+
+Type = 1 (Finish‑to‑Start)
+
+LinkLag = 0
+
+LagFormat matching your duration format
+
+This is the “L2‑only FS chain” the architect review said is already mostly correct; just make sure it runs off the compressed dates and not raw offsets.
+
+Keep milestones out of this L2 chain.
+
+Strategy Approval, Creative Approval, Pre‑Launch Review, Launch Complete etc should not be inserted into the L2 chain.
+
+They can depend on the last relevant deliverable (FS), but they should not sit between L2s in the critical path.
+
+3️⃣ Keep child tasks inside their parent deliverable
+
+This is the second big source of messy dependencies in Workfront.
+
+Right now, a lot of L3+/child tasks still have predecessors that point into other deliverables (e.g., a component under “Campaign Strategy” depending directly on a task under “Paid Media Strategy”). That’s what Ross was pointing at with the “work–wait–work–wait” gaps. When those cross‑L2 predecessors exist, Workfront uses them to schedule, even if your L2 chain says something else.
+
+Instructions for Replit:
+
+When building <PredecessorLink> elements for L3+ tasks:
+
+Compute the parent L2 WBS prefix for both predecessor and successor (e.g. 1.3 for 1.3.4.2).
+
+If parent_l2(predecessor) != parent_l2(successor), drop that predecessor in tight‑waterfall mode.
+
+In pseudocode:
+
+if TIGHT_WATERFALL and is_child_task(task):
+    keep_links = []
+    for link in original_predecessors:
+        if parent_L2(link.predecessor) == parent_L2(task):
+            keep_links.append(link)
+    task.predecessors = keep_links
+
+
+Allow internal structure to stay intact.
+
+Dependencies within a deliverable (e.g., “Research → Draft → Internal Review”) should be preserved.
+
+Only cross‑deliverable predecessors are stripped.
+
+Milestones exception again.
+
+Milestones can depend on tasks from multiple deliverables; that’s OK, since they sit at the very end and don’t break the L2 waterfall.
+
+Just don’t let milestones become predecessors of L2 deliverables in the chain.
+
+Result: when you view “Deliverables only” in Workfront, the dependency lines you see should be a neat stair‑step: each L2 finishing, next L2 starting, no random lines jumping halfway down the grid.
+
+4️⃣ Calendar & weekends
+
+Your XML currently defines a “Standard” calendar where Monday–Saturday are working days, Sunday non‑working, with 8‑hour days.
+
+Workfront often uses a 5‑day workweek. When it re‑schedules:
+
+Duration in days can change a bit (because “5 days” of work in a 6‑day calendar is not “5 days” in a 5‑day one).
+
+That can slightly shift end dates and break perfect alignments, even if the dependencies are correct.
+
+If you want Workfront to be the source of truth on weekends:
+You can leave the calendar as‑is; Workfront will remap to its own schedule. The waterfall shape should still be OK once the dependency and constraint logic above is fixed.
+
+If you want XML to match Workfront’s 5‑day week more closely:
+Ask Replit to change the calendar in convert_excel_to_mspdi so DayType 6 (Saturday) has DayWorking=0, and keep MinutesPerDay/Week as 480/2400.
+
+5️⃣ Concrete “ask” you can paste to Replit
+
+You can more or less paste this block:
+
+Goal: Tight, clean L2 deliverable waterfall in Workfront with no work‑wait‑work‑wait gaps and minimal spaghetti dependencies, matching exactly what Step 4 shows.
+
+Please implement:
+
+Single source of truth for schedule
+
+Make compress_deliverable_timeline() produce a CompressedDeliverableSchedule.
+
+Step 4 Gantt and PDFs already use this; wire convert_excel_to_mspdi() so L2 <Start>/<Finish> come from this schedule instead of raw scenario rows.
+
+Guard with ENABLE_TIGHT_WATERFALL feature flag.
+
+L2 deliverable chain
+
+For non‑milestone L2 tasks:
+
+ConstraintType=0 (ASAP), ManuallyScheduled=0, clear Manual* fields.
+
+First L2 may keep ConstraintType=2 (Must Start On) at project start if we want a fixed kickoff.
+
+Build a single Finish‑to‑Start chain between L2s: each L2 (except the first) gets a <PredecessorLink> with PredecessorUID = previous L2, Type=1, LinkLag=0.
+
+Do not insert milestones into this L2 chain.
+
+Child‑task dependency hygiene
+
+When emitting predecessors for L3+ tasks in tight‑waterfall mode, drop any <PredecessorLink> where the predecessor’s parent L2 WBS prefix differs from the successor’s.
+
+Preserve internal structure within a deliverable.
+
+Allow milestones to depend on whatever they need, but never let milestones become predecessors in the L2 chain.
+
+Calendar sanity
+
+(Optional) Update the MSPDI calendar to Mon–Fri working if we want closer match to Workfront.
+
+After this, I should be able to:
+
+Generate a new AI timeline in Step 4.
+
+Export XML.
+
+Import into Workfront and see L2 deliverables in a neat FS stair‑step, with no extra idle weeks between them, and dates that line up with the Step 4 PDFs (minus minor calendar differences).

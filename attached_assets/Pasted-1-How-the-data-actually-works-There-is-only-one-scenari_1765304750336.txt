@@ -1,0 +1,175 @@
+1. How the data actually works
+
+There is only one scenario in the backend:
+
+Step 2 builds a scenario and stores it in SCENARIO_STORE as both baseline and scenario. 
+
+12:09:25 - step 3 component box
+
+Step 3 always works off that same scenario object (the “Project Scenario”). totals.hours and totals.price on that object are recomputed from the items by _recompute_totals() every time you edit something. 
+
+12:09:25 - step 3 component box
+
+Deliverable Pricing Details is not a second thing being added on top.
+It’s just a different view of the same scenario:
+
+The POST /api/pricing/rebuild_breakdown endpoint:
+
+Pulls the current working scenario via get_working_scenario(session_id)
+
+Calls _recompute_totals(scenario) again to be safe
+
+Builds per‑deliverable rows + the One‑Time / Retainer / Grand Total summary that you see in those cards.
+
+So what you’re seeing now:
+
+You click Build Scenario → /api/scenarios returns the scenario + totals (this is what your giant “Grand Total” number is currently using).
+
+You click Save & View Totals → frontend calls /api/pricing/rebuild_breakdown, which recomputes the one‑time/retainer breakdown and returns new totals. The cards update, but your big “Grand Total” is still reading from the old number it got from /api/scenarios, so they don’t match.
+
+That’s why the One‑Time box jumps from 310k → 349k even though you didn’t touch Step 3 pricing: the first 310k is a stale “raw” total; the 349k is the consistent recomputed total.
+
+2. What you want it to do
+
+Target behavior:
+
+There is one source of truth (the scenario in SCENARIO_STORE).
+
+Every time Deliverable Pricing Details changes:
+
+The scenario is updated.
+
+Totals are recomputed in the backend.
+
+The One‑Time/Retainer cards and the big Grand Total are refreshed from the same recomputed summary.
+
+So:
+
+Grand Total should always come from summary.grand_total returned by /api/pricing/rebuild_breakdown.
+
+One‑Time and Retainer cards should use summary.one_time and summary.retainer from that same response.
+
+That guarantees everything is included and nothing is “double‑added.”
+
+3. What to change (conceptually)
+
+On the frontend (your Replit React / JS code), you likely have:
+
+A function that calls /api/scenarios when you click Build Scenario.
+
+A function that calls /api/pricing/rebuild_breakdown when you click Save & View Totals.
+
+State like grandTotal, oneTimeTotals, retainerTotals, pricingRows, etc.
+
+You want to:
+
+A. Treat /api/pricing/rebuild_breakdown as the canonical source for totals
+
+When you get the response from /api/pricing/rebuild_breakdown, use it to drive all the Step 3 numbers.
+
+Roughly:
+
+async function rebuildBreakdown(sessionId) {
+  const resp = await fetch('/api/pricing/rebuild_breakdown', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId })
+  });
+  const data = await resp.json();
+
+  // 1) update the Deliverable Pricing Details table
+  setDeliverableRows(data.breakdown);         // rows per deliverable
+
+  // 2) update the summary cards
+  const s = data.summary;
+  setOneTimeHours(s.one_time.hours);
+  setOneTimeCost(s.one_time.price);
+  setRetainerHours(s.retainer.hours);
+  setRetainerAnnualCost(s.retainer.annual_cost);
+
+  // 3) update the big Grand Total from the same summary
+  setGrandTotalHours(s.grand_total.hours);
+  setGrandTotalPrice(s.grand_total.price);
+}
+
+
+Right now your big Grand Total is probably using something like scenarioTotals.price from /api/scenarios. Change it so it uses summary.grand_total.price from this rebuildBreakdown response instead.
+
+B. Call rebuildBreakdown after every Step‑3 pricing change
+
+Any time the user edits Deliverable Pricing Details (hours, rate, price, cadence, months, etc.):
+
+Update your local scenario copy.
+
+Send that to the backend so it updates SCENARIO_STORE and recomputes totals (via scenario sync).
+
+Immediately call rebuildBreakdown(sessionId) to refresh the UI.
+
+If you’re using the sync endpoint (which you are in this codebase):
+
+async function onPricingCellChange(updatedScenario) {
+  // 1) push the new scenario to the backend
+  await fetch('/api/scenario/sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      session_id: sessionId,
+      scenario: updatedScenario,
+      last_server_version: currentServerVersion,
+      client_version: Date.now(),
+      selections: {}
+    })
+  });
+
+  // 2) pull the recomputed totals + breakdown
+  await rebuildBreakdown(sessionId);
+}
+
+
+You can call this on:
+
+onBlur of a cell
+
+or on a “Save Changes” button
+
+or even on each change if you want super‑real‑time behavior.
+
+4. Concrete “Replit steps” for you
+
+In Replit:
+
+Open the frontend file for Step 3
+Look for the file that renders “Step 3 — Pricing Configuration” (often something like step3-pricing.jsx, PricingStep3.tsx, or similar).
+
+Find where “Save & View Totals” is handled
+There will be a click handler for that button that already calls /api/pricing/rebuild_breakdown.
+
+Inside that handler, make sure you:
+
+store data.summary in state, and
+
+drive the big Grand Total from summary.grand_total.price instead of the /api/scenarios totals.
+
+Find where the big Grand Total is rendered
+Change whatever it’s using now (probably something like totals.price or scenarioTotals.price) to the new summary‑driven state, e.g.:
+
+<div className="grand-total-amount">
+  ${grandTotalPrice.toLocaleString()}
+</div>
+
+
+…where grandTotalPrice is coming from summary.grand_total.price.
+
+Wire Deliverable Pricing edits → sync → rebuild
+
+Locate the table component for “Deliverable Pricing Details”.
+
+In its cell edit handler:
+
+update your local scenario state,
+
+call /api/scenario/sync with that updated scenario,
+
+then call rebuildBreakdown(sessionId).
+
+That’s what gives you the “adjust the pricing details in real time and watch Grand Total move with it” behavior.

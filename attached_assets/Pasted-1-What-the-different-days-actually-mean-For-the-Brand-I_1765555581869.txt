@@ -1,0 +1,274 @@
+1. What the different “days” actually mean
+
+For the Brand Identity Development chunk in your app:
+
+300 hours effort
+
+Effort days @ 8h/d ≈ 38 days → purely hours / 8. This is “how many full‑time days of work if one person did it.”
+
+Span: 88 calendar days (2026‑01‑05 – 2026‑04‑02) → difference in calendar dates (Mon–Sun).
+
+Working duration (Mon–Fri): 64 days → number of business days (Mon–Fri, no weekends) between 1/5 and 4/2.
+
+Your app’s tooltip is using that last value (64 working days), which is correct.
+
+Workfront’s Duration column is also a working‑days number – but for a summary task (like “Brand Identity Development”) it is computed from its children: earliest child start → latest child finish, using the project calendar.
+
+So to make everything match, three things must all line up:
+
+The Step‑4 Gantt schedule (what you see in the app).
+
+The MSPDI XML (Duration + Start/Finish for the tasks).
+
+What Workfront calculates from those child tasks.
+
+Right now #1 and #2 are close, but #3 is still reading a shorter span from the child tasks, so Workfront shows 25 days.
+
+2. What the code is doing now
+
+From the “app gantt timeline should match workfront” doc and main.py:
+
+a) Business‑day duration per deliverable
+
+You already have logic that computes business‑day duration for each deliverable and stores it in duration_business_days and in a compression_map:
+
+info['duration_business_days'] = calculate_business_days_between(
+    info['min_start'], info['max_end']
+)
+
+
+and then:
+
+compression_map[code] = {
+    'old_start': old_start.isoformat(),
+    'old_end': deliverable['original_end'].isoformat(),
+    'new_start': new_start.isoformat(),
+    'new_end': new_end.isoformat(),
+    'shift_days': shift_days,
+    'duration_business_days': duration
+}
+``` :contentReference[oaicite:0]{index=0}  
+
+That’s what produces the “Working duration (Mon–Fri): 64 days” in the UI.
+
+### b) You *do* use that in the XML export – in theory
+
+In the XML export, in the `elif is_deliverable:` branch, you now try to get `duration_business_days` from the compression metadata:
+
+```python
+# Use business days from compression_metadata for Workfront alignment
+duration_days = None
+deliv_code = r.get("DeliverableCode", "")
+
+if compression_metadata and deliv_code:
+    comp_map = compression_metadata.get("compression_map", {}) or \
+               compression_metadata.get("compression", {}).get("compression_map", {})
+    if comp_map and deliv_code in comp_map:
+        biz_days = comp_map[deliv_code].get("duration_business_days")
+        if biz_days and biz_days > 0:
+            duration_days = biz_days
+            print(f"[XML EXPORT] Deliverable Duration (business days): {name_txt[:40]} = {duration_days} days from compression_map")
+
+
+If that fails, it falls back to plain calendar days based on Start/Finish. 
+
+12.12.25 app gantt timeline sho…
+
+In your newest XML, I can see the Brand Identity Development task has:
+
+<Duration>PT30720M</Duration>
+
+
+That’s 30,720 minutes, and with MinutesPerDay = 480 this is exactly 64 working days (64×480). 
+
+St.Regis_Nashville_Branding_Age…
+
+So the export is finally writing 64 days.
+
+c) Why Workfront still shows ~25 days
+
+Workfront treats “Project Summary” and “Brand Identity Development” as summary tasks with ~113 children beneath them (you’ve just got the view collapsed).
+
+For summary tasks:
+
+Workfront ignores the Duration value from the XML.
+
+It recomputes Duration as the span between earliest child start and latest child finish, using the Mon–Fri calendar.
+
+In your code, when you compress deliverables, there’s a special “no shift” path:
+
+if shift_days == 0:
+    # Even unshifted tasks need working duration fields for frontend display
+    task_copy = task.copy()
+    task_copy['timeline_working_duration_days'] = mapping['duration_business_days']
+    task_copy['timeline_start'] = mapping['new_start']
+    task_copy['timeline_end'] = mapping['new_end']
+    compressed_tasks.append(task_copy)
+    continue
+``` :contentReference[oaicite:3]{index=3}  
+
+So for deliverables where the optimizer already started them on the project start date (like your Brand Identity), **you never actually move the child tasks or extend any of their end dates** – you only attach metadata for the UI.
+
+Result:
+
+- App tooltip uses `duration_business_days = 64` → shows 64 working days.
+- XML writes `<Duration>PT30720M</Duration>` → 64 days.
+- **But the children still mostly end around early/mid‑February**, so Workfront recomputes the summary Duration from those children as ≈25 working days and ignores your 64‑day value.
+
+That’s why it “still looks the same” in Workfront even though the XML changed.
+
+---
+
+## 3. Exact instructions to give the Replit agent & architect
+
+You can paste this as a dev ticket.
+
+---
+
+### Ticket A – Make sure XML is always using business‑day durations
+
+1. **Confirm `compression_metadata` is actually passed into the XML export.**
+
+   - In the export endpoint (the one that returns the `.xml`), when you call the function that builds the MSPDI XML, pass the timeline compression metadata:
+
+   ```python
+   scen = get_working_scenario(session_id)
+   compression_metadata = scen.get("timeline_metadata") or scen.get("compression_metadata")
+   xml_bytes = convert_scenario_to_mspdi(
+       scen,
+       compression_metadata=compression_metadata,
+       # ...other args...
+   )
+
+
+Add logging to verify.
+
+In the elif is_deliverable: block of the XML builder (the one with the [XML EXPORT] 📏 Deliverable Duration logs), temporarily log the duration:
+
+print(f"[XML EXPORT] FINAL Duration minutes for {name_txt}: {duration_minutes}")
+
+
+For Brand Identity Development, you must see:
+
+One log line showing business days from compression_map (... = 64 days from compression_map) 
+
+12.12.25 app gantt timeline sho…
+
+One log line showing FINAL Duration minutes ... 30720.
+
+If you see it falling back to the “calendar fallback” path instead, then compression_metadata or DeliverableCode isn’t wired correctly yet.
+
+Ticket B – Make child tasks span the same working window as the deliverable
+
+Goal: summary duration in Workfront is based on child tasks, so we must make at least one child end on the deliverable’s new_end date.
+
+In compress_deliverables_to_waterfall (the function with Compress L2 deliverables to chain end-to-start with minimal idle time), after building compression_map and before returning compressed_tasks, do the following for each deliverable: 
+
+12.12.25 app gantt timeline sho…
+
+While you are building deliverable_info / deliverable_children, you already store:
+
+min_start, max_end for each deliverable.
+
+The list of child tasks per deliverable. 
+
+12.12.25 app gantt timeline sho…
+
+After you compute new_start / new_end and store them in compression_map, compute two deltas:
+
+duration_delta = (new_end - info['max_end']).days
+start_delta = (new_start - info['min_start']).days
+
+
+Extend the latest child task to new_end if duration_delta > 0:
+
+if duration_delta > 0:
+    # Pick the child task that currently ends last
+    latest_child = max(deliverable_children[code],
+                       key=lambda t: datetime.datetime.fromisoformat(t['end']).date())
+
+    end_dt = datetime.datetime.fromisoformat(latest_child['end']).date()
+    latest_child['end'] = (end_dt + datetime.timedelta(days=duration_delta)).isoformat()
+
+
+Optionally, if start_delta < 0, pull the earliest child back to new_start in a similar way.
+
+When you then build compressed_tasks, do not throw away those adjusted child tasks when shift_days == 0. Instead of just copying and continuing, keep the modified start/end:
+
+if shift_days == 0:
+    task_copy = task.copy()
+    task_copy['timeline_working_duration_days'] = mapping['duration_business_days']
+    task_copy['timeline_start'] = mapping['new_start']
+    task_copy['timeline_end'] = mapping['new_end']
+    # keep task_copy['start'] / ['end'] as already adjusted by the code above
+    compressed_tasks.append(task_copy)
+    continue
+
+
+This guarantees that:
+
+For Brand Identity, at least one child task ends on 2026‑04‑02.
+
+Workfront’s summary “Brand Identity Development” will now see an earliest start of 1/5 and a latest finish of 4/2 → ~64 working days, matching the app.
+
+Ticket C – Make sure Step‑4 uses the same tasks that are exported
+
+Double‑check that the same compressed tasks drive both the Step‑4 Gantt and the XML export.
+
+After compression, you already return (compressed_tasks, metadata) and save them to the scenario in the “TIMELINE SAVE” section:
+
+scen["timeline_tasks"] = tasks  # or similar
+scen["timeline_metadata"] = compression_metadata
+update_working_scenario(session_id, scen)
+``` :contentReference[oaicite:7]{index=7}  
+
+
+
+In the XML export, always read from scen["timeline_tasks"] if present, not from the original Step‑3 baseline.
+
+Something like:
+
+tasks_for_export = scen.get("timeline_tasks") or scen.get("items")
+
+
+Then build your uid_to_sched and MSPDI tasks from tasks_for_export.
+
+That ensures the dates in the XML are the post‑AI‑timeline ones, not the raw baseline.
+
+Ticket D – Sanity‑check numbers
+
+Ask the dev to:
+
+Log for Brand Identity (code for that deliverable) after compression:
+
+duration_business_days
+
+compression_map[code]['new_start'] and ['new_end']
+
+Log for the same deliverable, in the XML builder, the Start, Finish, and Duration (in minutes and in days).
+
+You want to see:
+
+new_start = 2026-01-05
+
+new_end = 2026-04-02
+
+duration_business_days = 64
+
+XML <Start> = 2026‑01‑05T08:00:00
+
+XML <Finish> = 2026‑04‑02T17:00:00
+
+XML <Duration> = PT30720M
+
+Once those are true, Workfront and the app will agree because they’re all using the same working‑day calendar and the same start/end.
+
+TL;DR you can send to them
+
+Use the deliverable duration_business_days from compression_metadata["compression_map"] when building deliverable tasks in the XML (and confirm we see [XML EXPORT] Deliverable Duration ... 64 days from compression_map in the logs).
+
+In compress_deliverables_to_waterfall, adjust at least one child task per deliverable so that its end date equals the deliverable’s new_end date (and its start equals new_start if needed). Don’t skip this when shift_days == 0.
+
+Make the XML export use the compressed timeline tasks (and timeline metadata) from Step‑4, not the original Step‑3 baseline rows.
+
+Verify for Brand Identity: XML has Start 2026‑01‑05, Finish 2026‑04‑02, Duration PT30720M (64 days), and the latest child task in the XML also finishes on 2026‑04‑02. Then Workfront’s Duration column should read 64 days, matching the app’s “Working duration (Mon–Fri).”
