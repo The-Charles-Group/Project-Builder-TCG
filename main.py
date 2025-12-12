@@ -10882,7 +10882,7 @@ def _export_single_scenario_xml(
             pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario.get("rate_band", "Standard_US"),
             blended_rate=scenario.get("blended_rate"),
-            add_deliverable_milestones=False,  # WORKFRONT COMPAT: Always False (ignore parameter)
+            add_deliverable_milestones=add_deliverable_milestones,  # Pass through for Phase Gate milestones
             compression_metadata=timeline_metadata  # TICKET: Business-day durations for Workfront
         )
         
@@ -14183,6 +14183,161 @@ def convert_excel_to_mspdi(
                 
                 print(f"[XML EXPORT] ⚓ Created finish anchor for deliverable: {r['Name']} (WBS {r['WBS']}) → Last leaf: {last_leaf['Name']} (UID {last_leaf['UID']}, WBS {last_leaf['WBS']}), Finish={finish_date})")
 
+        # ═══════════════════════════════════════════════════════════════════════════
+        # PHASE GATE MILESTONES: Create Start/End anchor milestones for L2 deliverables
+        # These are schedule anchors that pin the deliverable's duration in Workfront
+        # ═══════════════════════════════════════════════════════════════════════════
+        if add_deliverable_milestones and compression_metadata:
+            print(f"\n[PHASE GATES] Creating Start/End milestone gates for L2 deliverables...")
+            
+            # Get compression_map from metadata
+            comp_map = compression_metadata.get("compression_map", {}) or compression_metadata.get("compression", {}).get("compression_map", {})
+            
+            if comp_map:
+                phase_gate_uid = next_uid  # Continue from where finish anchors left off
+                phase_gate_id = next_id
+                
+                # Collect L2 deliverables with their dates
+                l2_deliverables = []
+                for r in rows:
+                    outline_level = r["WBS"].count(".") + 1 if r["WBS"] else 0
+                    is_root = r["WBS"] == "1"
+                    if outline_level == 2 and not is_root:
+                        deliv_code = r.get("DeliverableCode", "")
+                        deliv_name = r.get("Name", "Deliverable")
+                        deliv_wbs = r["WBS"]
+                        deliv_uid = r["UID"]
+                        
+                        # Get dates from compression_map
+                        if deliv_code and deliv_code in comp_map:
+                            deliv_dates = comp_map[deliv_code]
+                            start_date = deliv_dates.get("start_date") or deliv_dates.get("start")
+                            end_date = deliv_dates.get("end_date") or deliv_dates.get("end")
+                            
+                            if start_date and end_date:
+                                l2_deliverables.append({
+                                    "wbs": deliv_wbs,
+                                    "uid": deliv_uid,
+                                    "name": deliv_name,
+                                    "code": deliv_code,
+                                    "start": start_date,
+                                    "end": end_date
+                                })
+                
+                print(f"[PHASE GATES] Found {len(l2_deliverables)} L2 deliverables with compression dates")
+                
+                for deliv in l2_deliverables:
+                    deliv_wbs = deliv["wbs"]
+                    deliv_name = deliv["name"]
+                    deliv_level = deliv_wbs.count(".") + 1  # OutlineLevel of deliverable
+                    child_level = deliv_level + 1  # OutlineLevel of gates (children of deliverable)
+                    
+                    # Format dates with proper times (09:00 for start, 17:00 for end)
+                    start_date_str = deliv["start"]
+                    end_date_str = deliv["end"]
+                    
+                    # Normalize start date to 09:00:00
+                    if 'T' in str(start_date_str):
+                        start_date_part = str(start_date_str).split('T')[0]
+                    else:
+                        start_date_part = str(start_date_str)[:10]
+                    start_gate_datetime = f"{start_date_part}T09:00:00"
+                    
+                    # Normalize end date to 17:00:00
+                    if 'T' in str(end_date_str):
+                        end_date_part = str(end_date_str).split('T')[0]
+                    else:
+                        end_date_part = str(end_date_str)[:10]
+                    end_gate_datetime = f"{end_date_part}T17:00:00"
+                    
+                    # ─────────────────────────────────────────────────────────────
+                    # CREATE START GATE MILESTONE
+                    # ─────────────────────────────────────────────────────────────
+                    start_gate_uid = phase_gate_uid
+                    phase_gate_uid += 1
+                    start_gate_wbs = f"{deliv_wbs}.START"
+                    
+                    start_task = SubElement(tasks_elem, "Task")
+                    SubElement(start_task, "UID").text = str(start_gate_uid)
+                    SubElement(start_task, "ID").text = str(phase_gate_id)
+                    phase_gate_id += 1
+                    SubElement(start_task, "Name").text = f"{deliv_name} – Start (Auto)"
+                    SubElement(start_task, "WBS").text = start_gate_wbs
+                    SubElement(start_task, "OutlineNumber").text = start_gate_wbs
+                    SubElement(start_task, "OutlineLevel").text = str(child_level)
+                    
+                    # Milestone fields per user specification
+                    SubElement(start_task, "Summary").text = "0"
+                    SubElement(start_task, "Milestone").text = "1"
+                    SubElement(start_task, "Work").text = "PT0M"
+                    SubElement(start_task, "Duration").text = "PT0M"
+                    SubElement(start_task, "DurationFormat").text = "7"
+                    SubElement(start_task, "CalendarUID").text = "1"
+                    
+                    # Start = Finish for milestones
+                    SubElement(start_task, "Start").text = start_gate_datetime
+                    SubElement(start_task, "Finish").text = start_gate_datetime
+                    
+                    # Must Start On constraint (ConstraintType=2)
+                    SubElement(start_task, "ConstraintType").text = "2"
+                    SubElement(start_task, "ConstraintDate").text = start_gate_datetime
+                    
+                    SubElement(start_task, "Type").text = "1"  # Fixed Duration
+                    SubElement(start_task, "IsEffortDriven").text = "0"
+                    
+                    print(f"[PHASE GATES] ⚓ Start gate: {deliv_name} – Start (Auto) @ {start_date_part}")
+                    
+                    # ─────────────────────────────────────────────────────────────
+                    # CREATE END GATE MILESTONE
+                    # ─────────────────────────────────────────────────────────────
+                    end_gate_uid = phase_gate_uid
+                    phase_gate_uid += 1
+                    end_gate_wbs = f"{deliv_wbs}.END"
+                    
+                    end_task = SubElement(tasks_elem, "Task")
+                    SubElement(end_task, "UID").text = str(end_gate_uid)
+                    SubElement(end_task, "ID").text = str(phase_gate_id)
+                    phase_gate_id += 1
+                    SubElement(end_task, "Name").text = f"{deliv_name} – End (Auto)"
+                    SubElement(end_task, "WBS").text = end_gate_wbs
+                    SubElement(end_task, "OutlineNumber").text = end_gate_wbs
+                    SubElement(end_task, "OutlineLevel").text = str(child_level)
+                    
+                    # Milestone fields per user specification
+                    SubElement(end_task, "Summary").text = "0"
+                    SubElement(end_task, "Milestone").text = "1"
+                    SubElement(end_task, "Work").text = "PT0M"
+                    SubElement(end_task, "Duration").text = "PT0M"
+                    SubElement(end_task, "DurationFormat").text = "7"
+                    SubElement(end_task, "CalendarUID").text = "1"
+                    
+                    # Start = Finish for milestones
+                    SubElement(end_task, "Start").text = end_gate_datetime
+                    SubElement(end_task, "Finish").text = end_gate_datetime
+                    
+                    # Must Finish On constraint (ConstraintType=3)
+                    SubElement(end_task, "ConstraintType").text = "3"
+                    SubElement(end_task, "ConstraintDate").text = end_gate_datetime
+                    
+                    SubElement(end_task, "Type").text = "1"  # Fixed Duration
+                    SubElement(end_task, "IsEffortDriven").text = "0"
+                    
+                    # Optional: Add predecessor to last leaf task in deliverable (if found)
+                    last_leaf = find_last_leaf_in_deliverable(deliv_wbs, rows)
+                    if last_leaf:
+                        pred_link = SubElement(end_task, "PredecessorLink")
+                        SubElement(pred_link, "PredecessorUID").text = str(last_leaf["UID"])
+                        SubElement(pred_link, "Type").text = "1"  # Finish-to-Start
+                        SubElement(pred_link, "CrossProject").text = "0"
+                        SubElement(pred_link, "LinkLag").text = "0"
+                        SubElement(pred_link, "LagFormat").text = "7"
+                    
+                    print(f"[PHASE GATES] ⚓ End gate: {deliv_name} – End (Auto) @ {end_date_part}")
+                
+                print(f"[PHASE GATES] ✅ Created {len(l2_deliverables) * 2} phase gate milestones (Start + End for each L2)")
+            else:
+                print(f"[PHASE GATES] ⚠️ No compression_map found in metadata, skipping phase gates")
+
         # Assignments
         # CRITICAL FIX: Filter out assignments for summary/parent tasks
         # Summary tasks should have NO assignments - Workfront will roll up from children
@@ -14930,6 +15085,111 @@ def convert_excel_to_mspdi(
                             print(f"  This may cause Workfront to show inflated durations.")
         except Exception as e:
             print(f"[MSPDI Validation] Could not validate dates: {e}")
+
+        # ═══════════════════════════════════════════════════════════════════════════
+        # WORKFRONT CLEANUP: Strip problematic elements for clean import
+        # Per user requirements: No Resources, No Assignments, No FixedCost/CostType,
+        # Snap times to 09:00/17:00, No constraints on summary tasks
+        # ═══════════════════════════════════════════════════════════════════════════
+        if add_deliverable_milestones:
+            print(f"\n[WORKFRONT CLEANUP] Applying cleanup rules for Workfront import...")
+            cleanup_stats = {"resources_removed": 0, "assignments_removed": 0, "fixedcost_removed": 0, 
+                            "times_snapped": 0, "summary_constraints_removed": 0}
+            
+            # 1. Remove <Resources> element entirely
+            resources_elem_to_remove = project.find("Resources")
+            if resources_elem_to_remove is not None:
+                project.remove(resources_elem_to_remove)
+                cleanup_stats["resources_removed"] = 1
+                print(f"[WORKFRONT CLEANUP] 🗑️ Removed <Resources> element")
+            
+            # 2. Remove <Assignments> element entirely
+            assignments_elem_to_remove = project.find("Assignments")
+            if assignments_elem_to_remove is not None:
+                project.remove(assignments_elem_to_remove)
+                cleanup_stats["assignments_removed"] = 1
+                print(f"[WORKFRONT CLEANUP] 🗑️ Removed <Assignments> element")
+            
+            # 3. Remove FixedCost and CostType from all tasks
+            for task_elem in tasks_elem.findall("Task"):
+                fixed_cost_elem = task_elem.find("FixedCost")
+                cost_type_elem = task_elem.find("CostType")
+                fixed_cost_accrual_elem = task_elem.find("FixedCostAccrual")
+                
+                if fixed_cost_elem is not None:
+                    task_elem.remove(fixed_cost_elem)
+                    cleanup_stats["fixedcost_removed"] += 1
+                if cost_type_elem is not None:
+                    task_elem.remove(cost_type_elem)
+                if fixed_cost_accrual_elem is not None:
+                    task_elem.remove(fixed_cost_accrual_elem)
+            
+            if cleanup_stats["fixedcost_removed"] > 0:
+                print(f"[WORKFRONT CLEANUP] 🗑️ Removed FixedCost/CostType from {cleanup_stats['fixedcost_removed']} tasks")
+            
+            # 4. Snap times to 09:00:00 for starts and 17:00:00 for finishes
+            for task_elem in tasks_elem.findall("Task"):
+                start_elem = task_elem.find("Start")
+                finish_elem = task_elem.find("Finish")
+                constraint_date_elem = task_elem.find("ConstraintDate")
+                
+                if start_elem is not None and start_elem.text:
+                    original = start_elem.text
+                    if 'T' in original:
+                        date_part = original.split('T')[0]
+                        start_elem.text = f"{date_part}T09:00:00"
+                        if original != start_elem.text:
+                            cleanup_stats["times_snapped"] += 1
+                
+                if finish_elem is not None and finish_elem.text:
+                    original = finish_elem.text
+                    if 'T' in original:
+                        date_part = original.split('T')[0]
+                        finish_elem.text = f"{date_part}T17:00:00"
+                        if original != finish_elem.text:
+                            cleanup_stats["times_snapped"] += 1
+                
+                # Also snap ConstraintDate
+                if constraint_date_elem is not None and constraint_date_elem.text:
+                    original = constraint_date_elem.text
+                    if 'T' in original:
+                        date_part = original.split('T')[0]
+                        # Use 09:00 for start constraints (2, 4, 5), 17:00 for finish constraints (3, 6, 7)
+                        constraint_type_elem = task_elem.find("ConstraintType")
+                        if constraint_type_elem is not None:
+                            ct = constraint_type_elem.text
+                            if ct in ["3", "6", "7"]:  # Finish-related constraints
+                                constraint_date_elem.text = f"{date_part}T17:00:00"
+                            else:  # Start-related constraints
+                                constraint_date_elem.text = f"{date_part}T09:00:00"
+            
+            if cleanup_stats["times_snapped"] > 0:
+                print(f"[WORKFRONT CLEANUP] ⏰ Snapped {cleanup_stats['times_snapped']} task times to 09:00/17:00")
+            
+            # 5. Remove constraints from summary tasks (except root and milestones)
+            for task_elem in tasks_elem.findall("Task"):
+                summary_elem = task_elem.find("Summary")
+                uid_elem = task_elem.find("UID")
+                milestone_elem = task_elem.find("Milestone")
+                
+                is_summary = summary_elem is not None and summary_elem.text == "1"
+                is_root = uid_elem is not None and uid_elem.text == "1"
+                is_milestone = milestone_elem is not None and milestone_elem.text == "1"
+                
+                if is_summary and not is_root and not is_milestone:
+                    constraint_type_elem = task_elem.find("ConstraintType")
+                    constraint_date_elem = task_elem.find("ConstraintDate")
+                    
+                    if constraint_type_elem is not None:
+                        task_elem.remove(constraint_type_elem)
+                        cleanup_stats["summary_constraints_removed"] += 1
+                    if constraint_date_elem is not None:
+                        task_elem.remove(constraint_date_elem)
+            
+            if cleanup_stats["summary_constraints_removed"] > 0:
+                print(f"[WORKFRONT CLEANUP] 🔓 Removed constraints from {cleanup_stats['summary_constraints_removed']} summary tasks")
+            
+            print(f"[WORKFRONT CLEANUP] ✅ Cleanup complete: {cleanup_stats}")
 
         # Write XML file with proper formatting and error handling
         xml_string = tostring(project, encoding='unicode')

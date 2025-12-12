@@ -1,0 +1,131 @@
+What to tell Replit Agent + Architect (exact instructions)
+✅ Requirement
+
+Make Workfront’s summary duration match the app’s “working duration (Mon–Fri)” by forcing child span.
+
+✅ Implementation: add “Phase Gate” tasks (recommended)
+
+For every L2 deliverable summary (like Brand Identity Development), automatically generate two leaf milestone tasks under it:
+
+[Deliverable] – Start (Auto)
+
+[Deliverable] – End (Auto)
+
+These are not real work tasks; they are schedule anchors.
+
+Fields for BOTH gate tasks (MSPDI XML)
+
+Summary = 0
+
+Milestone = 1
+
+Work = PT0M
+
+Duration = PT0M
+
+CalendarUID = 1
+
+DurationFormat = 7
+
+Start gate (Must Start On)
+
+Start = deliverable_start at 09:00:00
+
+Finish = same as Start (because milestone)
+
+ConstraintType = Must Start On (MSPDI = 2)
+
+ConstraintDate = same datetime
+
+End gate (Must Finish On)
+
+Start = deliverable_end at 17:00:00
+
+Finish = same as Start
+
+ConstraintType = Must Finish On (MSPDI = 3)
+
+ConstraintDate = same datetime
+
+✅ For Brand Identity Development specifically (your app window):
+
+Start gate pinned to 2026‑01‑05 09:00
+
+End gate pinned to 2026‑04‑02 17:00
+
+Your project header already indicates the overall window is 2026‑01‑05 → 2026‑04‑02 
+
+St.Regis_Nashville_Branding_Age…
+
+, so these dates are aligned with what you’re already exporting.
+
+✅ Optional but recommended: tie the End gate to the real work
+
+Add a predecessor link:
+
+Last real leaf task in deliverable → End gate
+
+Relationship: Finish‑to‑Start (FS)
+
+This keeps the milestone behaving like a legit “Complete” gate.
+Because it’s also constrained to 4/2, it will “wait” there if work finishes early, creating visible slack (which is correct if the deliverable is meant to span that entire window).
+
+Why this solves your exact requirement (64 days + same dates)
+
+Once those gate tasks exist:
+
+Earliest child Start = 1/5
+
+Latest child Finish = 4/2
+
+Workfront summary rollup becomes:
+
+Start On = 1/5
+
+Due On = 4/2
+
+Duration = 64 business days (Mon–Fri)
+
+Even if the “real work” tasks inside the deliverable compress into a shorter critical path, the deliverable will still correctly reflect the span your app is presenting.
+
+Critical note for Replit (this is where exports keep failing)
+
+You’re already having Workfront import failures. While Option A is being implemented, make sure the export still follows the safe rules:
+
+No <Resources>
+
+No <Assignments>
+
+No FixedCost/CostType on tasks (at least until imports are stable)
+
+No weird times like 23:06:19 — snap to 09:00 starts and 17:00 finishes
+
+No constraints on summary tasks
+
+Those exact issues are present in your current export 
+
+St.Regis_Nashville_Branding_Age…
+
+ and are known to trigger the generic import toast.
+
+Acceptance test (tell Replit this verbatim)
+
+After implementing gates:
+
+Export XML from the app
+
+Import into Workfront
+
+In the task list, Brand Identity Development row must show:
+
+Start On 1/5/26
+
+Due On 4/2/26
+
+Duration 64 Days
+
+It must include two children:
+
+“Brand Identity Development – Start (Auto)” (milestone)
+
+“Brand Identity Development – End (Auto)” (milestone)
