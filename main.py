@@ -6054,60 +6054,6 @@ def compress_deliverable_timeline(
         else:
             current_start = add_business_days(new_end, 1)
     
-    # TICKET B: Extend child tasks to match deliverable's new_start/new_end dates
-    # This is critical for Workfront: summary task duration is computed from children,
-    # so we must ensure at least one child starts on new_start and one ends on new_end
-    # This makes Workfront's recomputed summary duration match our intended duration
-    for code, mapping in compression_map.items():
-        children = deliverable_children.get(code, [])
-        if not children:
-            continue
-        
-        info = deliverable_info.get(code)
-        if not info:
-            continue
-        
-        new_start_dt = datetime.datetime.fromisoformat(mapping['new_start']).date()
-        new_end_dt = datetime.datetime.fromisoformat(mapping['new_end']).date()
-        
-        print(f"[Compress] {code}: Aligning children to new_start={new_start_dt}, new_end={new_end_dt}")
-        
-        # Find valid (non-milestone) children with start/end dates
-        valid_children_with_dates = []
-        for child in children:
-            is_milestone = child.get('is_milestone', False) or child.get('name', '').lower().endswith('approval')
-            if is_milestone:
-                continue
-            child_start = child.get('start', '')
-            child_end = child.get('end', '')
-            if child_start and child_end:
-                try:
-                    start_dt = datetime.datetime.fromisoformat(child_start.replace('Z', '')).date()
-                    end_dt = datetime.datetime.fromisoformat(child_end.replace('Z', '')).date()
-                    valid_children_with_dates.append((child, start_dt, end_dt))
-                except (ValueError, AttributeError):
-                    continue
-        
-        if not valid_children_with_dates:
-            print(f"[Compress] {code}: No valid non-milestone children found, skipping alignment")
-            continue
-        
-        # Find earliest-starting and latest-ending children
-        earliest_child, earliest_start, _ = min(valid_children_with_dates, key=lambda x: x[1])
-        latest_child, _, latest_end = max(valid_children_with_dates, key=lambda x: x[2])
-        
-        # ALWAYS set earliest child's start to new_start (handles both positive and negative shifts)
-        if earliest_start != new_start_dt:
-            old_start = earliest_start
-            earliest_child['start'] = new_start_dt.isoformat()
-            print(f"[Compress] Set earliest child '{earliest_child.get('name', '')[:40]}' start: {old_start} -> {new_start_dt}")
-        
-        # ALWAYS set latest child's end to new_end (handles both positive and negative shifts)
-        if latest_end != new_end_dt:
-            old_end = latest_end
-            latest_child['end'] = new_end_dt.isoformat()
-            print(f"[Compress] Set latest child '{latest_child.get('name', '')[:40]}' end: {old_end} -> {new_end_dt}")
-    
     compressed_tasks = []
     for task in tasks:
         deliverable_code = task.get('deliverable_code', '')
@@ -6156,6 +6102,69 @@ def compress_deliverable_timeline(
                 pass
         
         compressed_tasks.append(new_task)
+    
+    # TICKET B: Extend boundary children to span the full deliverable window
+    # This is critical for Workfront: summary task duration is computed from children,
+    # so we must ensure at least one child starts on new_start and one ends on new_end
+    # This must happen AFTER the shift loop to avoid double-shifting
+    
+    # Build a map of children by deliverable_code from compressed_tasks
+    compressed_children_by_deliv: Dict[str, List[dict]] = {}
+    for task in compressed_tasks:
+        deliv_code = task.get('deliverable_code', '')
+        parent_code = task.get('parent_deliverable_code', '') or task.get('parent_code', '')
+        # A task is a child if it has a parent reference OR if it's a component/task level item
+        task_level = task.get('level', 0)
+        if task_level > 2 or (parent_code and parent_code in compression_map):
+            effective_parent = parent_code if parent_code else deliv_code
+            if effective_parent in compression_map:
+                compressed_children_by_deliv.setdefault(effective_parent, []).append(task)
+    
+    # Extend boundary children for each deliverable
+    for code, mapping in compression_map.items():
+        children = compressed_children_by_deliv.get(code, [])
+        if not children:
+            print(f"[Compress TICKET B] {code}: No children found in compressed_tasks")
+            continue
+        
+        new_start_dt = datetime.datetime.fromisoformat(mapping['new_start']).date()
+        new_end_dt = datetime.datetime.fromisoformat(mapping['new_end']).date()
+        
+        print(f"[Compress TICKET B] {code}: Aligning {len(children)} children to span {new_start_dt} -> {new_end_dt}")
+        
+        # Find valid (non-milestone) children with start/end dates
+        valid_children_with_dates = []
+        for child in children:
+            is_milestone = child.get('is_milestone', False) or child.get('name', '').lower().endswith('approval')
+            if is_milestone:
+                continue
+            child_start = child.get('start', '')
+            child_end = child.get('end', '')
+            if child_start and child_end:
+                try:
+                    start_dt = datetime.datetime.fromisoformat(child_start.replace('Z', '')).date()
+                    end_dt = datetime.datetime.fromisoformat(child_end.replace('Z', '')).date()
+                    valid_children_with_dates.append((child, start_dt, end_dt))
+                except (ValueError, AttributeError):
+                    continue
+        
+        if not valid_children_with_dates:
+            print(f"[Compress TICKET B] {code}: No valid non-milestone children found, skipping alignment")
+            continue
+        
+        # Find earliest-starting and latest-ending children
+        earliest_child, earliest_start, _ = min(valid_children_with_dates, key=lambda x: x[1])
+        latest_child, _, latest_end = max(valid_children_with_dates, key=lambda x: x[2])
+        
+        # Set earliest child's start to new_start
+        if earliest_start != new_start_dt:
+            print(f"[Compress TICKET B] Set earliest child '{earliest_child.get('name', '')[:40]}' start: {earliest_start} -> {new_start_dt}")
+            earliest_child['start'] = new_start_dt.isoformat()
+        
+        # Set latest child's end to new_end
+        if latest_end != new_end_dt:
+            print(f"[Compress TICKET B] Set latest child '{latest_child.get('name', '')[:40]}' end: {latest_end} -> {new_end_dt}")
+            latest_child['end'] = new_end_dt.isoformat()
     
     metadata = {
         "compressed": True,
@@ -12771,6 +12780,9 @@ def convert_excel_to_mspdi(
                 "DurationHours": duration_hours
             }
 
+        # TICKET B: Initialize compressed_timeline_uids set for child stretching (populated below if compressed_timeline exists)
+        compressed_timeline_uids = set()
+        
         # TASK 1: Apply compressed_timeline as single source of truth for L2 deliverable dates
         # This ensures Step-4 Gantt and XML export use the same schedule
         if compressed_timeline:
@@ -12824,6 +12836,9 @@ def convert_excel_to_mspdi(
                     uid_to_sched[uid]["Start"] = start_dt
                     uid_to_sched[uid]["Finish"] = end_dt
                     uid_to_sched[uid]["DurationHours"] = duration_hours
+                    
+                    # TICKET B: Track this UID for child stretching
+                    compressed_timeline_uids.add(uid)
                     
                     shift_days = (start_dt.date() - old_start.date()).days if hasattr(old_start, 'date') else 0
                     print(f"[XML EXPORT] ✅ L2 {deliv_code}: {old_start.date() if hasattr(old_start, 'date') else 'N/A'} → {start_dt.date()} (shift={shift_days}d)")
@@ -12916,6 +12931,17 @@ def convert_excel_to_mspdi(
                 preserved_finish = uid_to_sched[preserved_uid]["Finish"]
                 stretch_and_clamp_descendants(preserved_uid, preserved_start, preserved_finish)
                 print(f"[XML EXPORT] 🔒 Stretched descendants of preserved UID {preserved_uid} to fill {preserved_start.date()} to {preserved_finish.date()}")
+        
+        # TICKET B: Stretch and clamp descendants for compressed timeline deliverables
+        # This ensures Workfront recomputes the correct summary duration (64 days vs 25 days)
+        # by ensuring child tasks span the full deliverable window (new_start to new_end)
+        if compressed_timeline_uids:
+            for ct_uid in compressed_timeline_uids:
+                if ct_uid in uid_to_sched and ct_uid in children_by_parent:
+                    ct_start = uid_to_sched[ct_uid]["Start"]
+                    ct_finish = uid_to_sched[ct_uid]["Finish"]
+                    stretch_and_clamp_descendants(ct_uid, ct_start, ct_finish)
+                    print(f"[XML EXPORT] 🎯 TICKET B: Stretched children of compressed timeline UID {ct_uid} to fill {ct_start.date()} to {ct_finish.date()}")
         
         # 1) roll up start/finish for every summary from its direct/indirect leaves
         def rollup_summary(uid):
