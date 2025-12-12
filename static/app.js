@@ -2333,25 +2333,39 @@ const pricingDataEnhanced = {
   componentTasks: new Map(),    // deliverable_code -> array of tasks
 };
 
+// Pricing view mode: 'traditional' (default) or 'unified'
+// Build Scenario should show traditional view; unified is only for explicit toggle
+let pricingViewMode = 'traditional';
+
 // UNIFIED PRICING TABLE - Fully editable inline version
 // NOTE: This function should NOT overwrite the component-level table from index.html
-// The traditional deliverable/component table is the default view
+// unless explicitly switched to unified mode via toggle
 function updatePricingTable() {
-  // CRITICAL FIX: Always preserve the traditional deliverable/component table
-  // The unified table should only be shown when explicitly toggled by user
-  // Just update the summary elements and return without overwriting
+  // CRITICAL FIX: Default to traditional view - only show unified if explicitly toggled
+  // The traditional deliverable/component table is rendered by updatePricingDisplay in index.html
   const pricingTbody = document.getElementById('pricing-tbody');
-  if (pricingTbody) {
-    // Always update summary without touching the table
-    const scenarios = getScenarioState();
-    if (scenarios && scenarios.A) {
-      updatePricingSummary();
+  
+  // Always update summary regardless of mode
+  const scenarios = getScenarioState();
+  if (scenarios && scenarios.A) {
+    updatePricingSummary();
+  }
+  
+  // If in traditional mode (default), preserve the existing table
+  if (pricingViewMode === 'traditional' && pricingTbody) {
+    // Check if traditional table has content - if so, don't overwrite
+    if (pricingTbody.children.length > 0) {
+      return;  // Traditional table already populated - don't overwrite
     }
-    return;  // NEVER overwrite with unified table - let updatePricingDisplay handle rendering
+  }
+  
+  // Only proceed to render unified table if explicitly in unified mode
+  if (pricingViewMode !== 'unified') {
+    return;  // Not in unified mode - let traditional table handle rendering
   }
   
   const container = document.getElementById('pricing-container') || document.getElementById('pricing-tbody')?.parentElement?.parentElement;
-  const scenarios = getScenarioState();
+  // Note: scenarios already declared above, reuse it
   if (!container || !scenarios) return;
   
   const scenario = scenarios.A || scenarios[0];
