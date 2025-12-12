@@ -12856,6 +12856,9 @@ def convert_excel_to_mspdi(
                 children_by_parent[parent_uid] = [wbs_to_uid.get(child_wbs) for child_wbs in child_wbs_list if wbs_to_uid.get(child_wbs)]
         summary_set = set(children_by_parent.keys())
 
+        # TICKET B FIX: Track ALL stretched UIDs (not just top-level) to prevent rollup_summary overwriting
+        stretched_uids = set()
+        
         # Helper function to STRETCH and clamp all descendants to fit within parent's date range
         def stretch_and_clamp_descendants(uid, bound_start, bound_finish):
             """
@@ -12912,6 +12915,9 @@ def convert_excel_to_mspdi(
                 uid_to_sched[k]["Start"] = new_start
                 uid_to_sched[k]["Finish"] = new_finish
                 
+                # TICKET B FIX: Mark this UID as stretched so rollup_summary won't overwrite it
+                stretched_uids.add(k)
+                
                 # Recalculate duration for stretched child
                 duration_hours = max(1.0, (new_finish - new_start).total_seconds() / 3600)
                 uid_to_sched[k]["DurationHours"] = duration_hours
@@ -12943,6 +12949,9 @@ def convert_excel_to_mspdi(
                     stretch_and_clamp_descendants(ct_uid, ct_start, ct_finish)
                     print(f"[XML EXPORT] 🎯 TICKET B: Stretched children of compressed timeline UID {ct_uid} to fill {ct_start.date()} to {ct_finish.date()}")
         
+        # TICKET B: Log how many UIDs were protected from rollup overwrite
+        print(f"[XML EXPORT] 🛡️ TICKET B: Protected {len(stretched_uids)} stretched UIDs from rollup_summary overwrite")
+        
         # 1) roll up start/finish for every summary from its direct/indirect leaves
         def rollup_summary(uid):
             kids = children_by_parent.get(uid, [])
@@ -12953,6 +12962,11 @@ def convert_excel_to_mspdi(
             # Descendants were already clamped above, so we don't need to recalculate anything
             # This prevents rollup from overwriting Campaign Plan Deck (Mar 5) back to Jan 5
             if uid in preserved_dates:
+                return uid_to_sched[uid]["Start"], uid_to_sched[uid]["Finish"]
+            
+            # TICKET B FIX: If this UID was stretched, preserve its stretched dates
+            # This prevents rollup from overwriting L3/L4 summary tasks back to short spans
+            if uid in stretched_uids:
                 return uid_to_sched[uid]["Start"], uid_to_sched[uid]["Finish"]
             
             # For non-preserved summaries, recurse to collect child dates
