@@ -1,0 +1,89 @@
+🚨 THE FIX (FAST): Your XML Must Include the Required MSP Header Fields
+
+Add the following block immediately after <Project> and BEFORE <Name>.
+
+Use exactly what Workfront generates in its export — we know WF accepts this format because it came FROM Workfront:
+
+✅ COPY–PASTE THIS REQUIRED HEADER INTO YOUR EXPORTER
+<SaveVersion>9</SaveVersion>
+<Title>Your Project Name Here</Title>
+<Author>Agency Project Builder</Author>
+<ScheduleFromStart>1</ScheduleFromStart>
+<FYStartDate>1</FYStartDate>
+<CriticalSlackLimit>0</CriticalSlackLimit>
+<CurrencyDigits>2</CurrencyDigits>
+<CurrencySymbol>$</CurrencySymbol>
+<CurrencySymbolPosition>0</CurrencySymbolPosition>
+<CalendarUID>1</CalendarUID>
+<DefaultStartTime>08:00:00</DefaultStartTime>
+<DefaultFinishTime>17:00:00</DefaultFinishTime>
+<MinutesPerDay>480</MinutesPerDay>
+<MinutesPerWeek>2400</MinutesPerWeek>
+<DaysPerMonth>20</DaysPerMonth>
+<DefaultTaskType>0</DefaultTaskType>
+<DefaultFixedCostAccrual>2</DefaultFixedCostAccrual>
+<DefaultStandardRate>10</DefaultStandardRate>
+<DefaultOvertimeRate>15</DefaultOvertimeRate>
+<DurationFormat>7</DurationFormat>
+<WorkFormat>2</WorkFormat>
+<EditableActualCosts>0</EditableActualCosts>
+<HonorConstraints>0</HonorConstraints>
+<EarnedValueMethod>0</EarnedValueMethod>
+<InsertedProjectsLikeSummary>0</InsertedProjectsLikeSummary>
+<MultipleCriticalPaths>0</MultipleCriticalPaths>
+<NewTasksEffortDriven>0</NewTasksEffortDriven>
+<NewTasksEstimated>1</NewTasksEstimated>
+<SplitsInProgressTasks>0</SplitsInProgressTasks>
+<SpreadActualCost>0</SpreadActualCost>
+<SpreadPercentComplete>0</SpreadPercentComplete>
+<TaskUpdatesResource>1</TaskUpdatesResource>
+<FiscalYearStart>0</FiscalYearStart>
+<WeekStartDay>1</WeekStartDay>
+
+
+These fields come directly from Workfront's working export, so they guarantee compatibility.
+
+💥 DO NOT REMOVE <Name> — KEEP IT AFTER THIS BLOCK
+
+Your new top of file must look like:
+
+<?xml version="1.0"?>
+<Project xmlns="http://schemas.microsoft.com/project">
+    <SaveVersion>9</SaveVersion>
+    <Title>St.Regis_Nashville_Branding_Agency_RFP_10.22.2024</Title>
+    <Author>Agency Project Builder</Author>
+    ...
+    <WeekStartDay>1</WeekStartDay>
+
+    <Name>St.Regis_Nashville_Branding_Agency_RFP_10.22.2024</Name>
+    <CreationDate>2025-12-12T19:55:52</CreationDate>
+    <StartDate>2026-01-05T08:00:00</StartDate>
+    <FinishDate>2026-04-02T17:00:00</FinishDate>
+    ...
+
+🧨 WHY WORKFRONT NEEDS THIS
+
+Workfront's MSP importer expects the full MSPDI “Project Info” section.
+
+If it’s missing, Workfront errors out before even reaching Tasks, so:
+
+It does not load Gantt data
+
+It does not validate durations
+
+It does not get far enough to schedule tasks
+
+That’s exactly the behavior you saw in the screenshot.
+
+⚡ WHAT TO TELL REPLIT (COPY–PASTE)
+
+URGENT: Workfront XML import fails because our app now omits the required MSPDI Project Info header.
+
+The XML must include the MSPDI <SaveVersion>, <Title>, <Author>, <DefaultTaskType>, <WorkFormat>, <CalendarUID>, and other metadata fields Workfront uses at the start of the <Project> element.
+
+The absence of this block causes Workfront to return "We're not sure why, but we couldn't read the file."
+
+FIX: Add the standard MSP header shown below right after <Project> and before <Name> in the XML generator.
+(Provide them the block above.)
+
+This restores schema compliance, and Workfront will import the file again.

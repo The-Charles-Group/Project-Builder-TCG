@@ -13715,6 +13715,44 @@ def convert_excel_to_mspdi(
         # Generate XML
         project = Element("Project", xmlns="http://schemas.microsoft.com/project")
         
+        # WORKFRONT FIX: Add required MSPDI Project Info header fields BEFORE <Name>
+        # These fields are required for Workfront to properly import the XML file
+        # Without them, Workfront returns "We're not sure why, but we couldn't read the file"
+        SubElement(project, "SaveVersion").text = "9"
+        SubElement(project, "Title").text = (project_name or project_title)
+        SubElement(project, "Author").text = "Agency Project Builder"
+        SubElement(project, "ScheduleFromStart").text = "1"
+        SubElement(project, "FYStartDate").text = "1"
+        SubElement(project, "CriticalSlackLimit").text = "0"
+        SubElement(project, "CurrencyDigits").text = "2"
+        SubElement(project, "CurrencySymbol").text = "$"
+        SubElement(project, "CurrencySymbolPosition").text = "0"
+        SubElement(project, "CalendarUID").text = "1"
+        SubElement(project, "DefaultStartTime").text = "08:00:00"
+        SubElement(project, "DefaultFinishTime").text = "17:00:00"
+        SubElement(project, "MinutesPerDay").text = "480"
+        SubElement(project, "MinutesPerWeek").text = "2400"
+        SubElement(project, "DaysPerMonth").text = "20"
+        SubElement(project, "DefaultTaskType").text = "0"
+        SubElement(project, "DefaultFixedCostAccrual").text = "2"
+        SubElement(project, "DefaultStandardRate").text = "10"
+        SubElement(project, "DefaultOvertimeRate").text = "15"
+        SubElement(project, "DurationFormat").text = "7"
+        SubElement(project, "WorkFormat").text = "2"
+        SubElement(project, "EditableActualCosts").text = "0"
+        SubElement(project, "HonorConstraints").text = "0"
+        SubElement(project, "EarnedValueMethod").text = "0"
+        SubElement(project, "InsertedProjectsLikeSummary").text = "0"
+        SubElement(project, "MultipleCriticalPaths").text = "0"
+        SubElement(project, "NewTasksEffortDriven").text = "0"
+        SubElement(project, "NewTasksEstimated").text = "1"
+        SubElement(project, "SplitsInProgressTasks").text = "0"
+        SubElement(project, "SpreadActualCost").text = "0"
+        SubElement(project, "SpreadPercentComplete").text = "0"
+        SubElement(project, "TaskUpdatesResource").text = "1"
+        SubElement(project, "FiscalYearStart").text = "0"
+        SubElement(project, "WeekStartDay").text = "1"
+        
         # Project info - use explicit project_name if provided, otherwise fall back to derived title
         SubElement(project, "Name").text = (project_name or project_title)
         SubElement(project, "CreationDate").text = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
@@ -13724,15 +13762,8 @@ def convert_excel_to_mspdi(
         SubElement(project, "FinishDate").text = project_finish.strftime("%Y-%m-%dT%H:%M:%S")
         SubElement(project, "CurrentDate").text = project_start.strftime("%Y-%m-%dT%H:%M:%S")
         
-        # Project header tuning
+        # Additional project settings
         SubElement(project, "DefaultCalendarUID").text = "1"
-        SubElement(project, "ScheduleFromStart").text = "1"
-        SubElement(project, "MinutesPerDay").text = "480"
-        SubElement(project, "MinutesPerWeek").text = "2400"
-        SubElement(project, "DaysPerMonth").text = "20"
-        SubElement(project, "DurationFormat").text = "7"
-        SubElement(project, "DefaultStartTime").text = "09:00:00"
-        SubElement(project, "DefaultFinishTime").text = "17:00:00"
         
         # Calendars
         calendars = SubElement(project, "Calendars")
