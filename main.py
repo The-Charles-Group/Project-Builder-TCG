@@ -6054,9 +6054,10 @@ def compress_deliverable_timeline(
         else:
             current_start = add_business_days(new_end, 1)
     
-    # TICKET B: Extend child tasks to match deliverable's new_end date
+    # TICKET B: Extend child tasks to match deliverable's new_start/new_end dates
     # This is critical for Workfront: summary task duration is computed from children,
-    # so we must ensure at least one child ends on the deliverable's new_end
+    # so we must ensure at least one child starts on new_start and one ends on new_end
+    # This makes Workfront's recomputed summary duration match our intended duration
     for code, mapping in compression_map.items():
         children = deliverable_children.get(code, [])
         if not children:
@@ -6069,55 +6070,43 @@ def compress_deliverable_timeline(
         new_start_dt = datetime.datetime.fromisoformat(mapping['new_start']).date()
         new_end_dt = datetime.datetime.fromisoformat(mapping['new_end']).date()
         
-        # Calculate deltas between original span and new span
-        duration_delta = (new_end_dt - info['max_end']).days
-        start_delta = (new_start_dt - info['min_start']).days
+        print(f"[Compress] {code}: Aligning children to new_start={new_start_dt}, new_end={new_end_dt}")
         
-        print(f"[Compress] {code}: duration_delta={duration_delta}, start_delta={start_delta}")
+        # Find valid (non-milestone) children with start/end dates
+        valid_children_with_dates = []
+        for child in children:
+            is_milestone = child.get('is_milestone', False) or child.get('name', '').lower().endswith('approval')
+            if is_milestone:
+                continue
+            child_start = child.get('start', '')
+            child_end = child.get('end', '')
+            if child_start and child_end:
+                try:
+                    start_dt = datetime.datetime.fromisoformat(child_start.replace('Z', '')).date()
+                    end_dt = datetime.datetime.fromisoformat(child_end.replace('Z', '')).date()
+                    valid_children_with_dates.append((child, start_dt, end_dt))
+                except (ValueError, AttributeError):
+                    continue
         
-        # Find the latest-ending child task and extend it to new_end
-        if duration_delta != 0:
-            latest_child = None
-            latest_end = None
-            for child in children:
-                child_end = child.get('end', '')
-                if child_end:
-                    try:
-                        end_dt = datetime.datetime.fromisoformat(child_end.replace('Z', '')).date()
-                        if latest_end is None or end_dt > latest_end:
-                            latest_end = end_dt
-                            latest_child = child
-                    except (ValueError, AttributeError):
-                        continue
-            
-            if latest_child and latest_end:
-                # Extend the child's end date to match new_end
-                old_child_end = latest_end
-                new_child_end = old_child_end + datetime.timedelta(days=duration_delta)
-                latest_child['end'] = new_child_end.isoformat()
-                print(f"[Compress] Extended child '{latest_child.get('name', '')[:40]}' end: {old_child_end} -> {new_child_end}")
+        if not valid_children_with_dates:
+            print(f"[Compress] {code}: No valid non-milestone children found, skipping alignment")
+            continue
         
-        # Find the earliest-starting child task and pull it to new_start
-        if start_delta != 0:
-            earliest_child = None
-            earliest_start = None
-            for child in children:
-                child_start = child.get('start', '')
-                if child_start:
-                    try:
-                        start_dt = datetime.datetime.fromisoformat(child_start.replace('Z', '')).date()
-                        if earliest_start is None or start_dt < earliest_start:
-                            earliest_start = start_dt
-                            earliest_child = child
-                    except (ValueError, AttributeError):
-                        continue
-            
-            if earliest_child and earliest_start:
-                # Adjust the child's start date to match new_start
-                old_child_start = earliest_start
-                new_child_start = old_child_start + datetime.timedelta(days=start_delta)
-                earliest_child['start'] = new_child_start.isoformat()
-                print(f"[Compress] Adjusted child '{earliest_child.get('name', '')[:40]}' start: {old_child_start} -> {new_child_start}")
+        # Find earliest-starting and latest-ending children
+        earliest_child, earliest_start, _ = min(valid_children_with_dates, key=lambda x: x[1])
+        latest_child, _, latest_end = max(valid_children_with_dates, key=lambda x: x[2])
+        
+        # ALWAYS set earliest child's start to new_start (handles both positive and negative shifts)
+        if earliest_start != new_start_dt:
+            old_start = earliest_start
+            earliest_child['start'] = new_start_dt.isoformat()
+            print(f"[Compress] Set earliest child '{earliest_child.get('name', '')[:40]}' start: {old_start} -> {new_start_dt}")
+        
+        # ALWAYS set latest child's end to new_end (handles both positive and negative shifts)
+        if latest_end != new_end_dt:
+            old_end = latest_end
+            latest_child['end'] = new_end_dt.isoformat()
+            print(f"[Compress] Set latest child '{latest_child.get('name', '')[:40]}' end: {old_end} -> {new_end_dt}")
     
     compressed_tasks = []
     for task in tasks:
