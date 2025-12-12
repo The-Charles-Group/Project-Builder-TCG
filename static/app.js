@@ -2335,23 +2335,19 @@ const pricingDataEnhanced = {
 
 // UNIFIED PRICING TABLE - Fully editable inline version
 // NOTE: This function should NOT overwrite the component-level table from index.html
-// when it is already populated with component rows
+// The traditional deliverable/component table is the default view
 function updatePricingTable() {
-  // Check if the original component table (from index.html) is already populated
-  // If it has component rows, don't replace it with the unified table
+  // CRITICAL FIX: Always preserve the traditional deliverable/component table
+  // The unified table should only be shown when explicitly toggled by user
+  // Just update the summary elements and return without overwriting
   const pricingTbody = document.getElementById('pricing-tbody');
-  if (pricingTbody && pricingTbody.children.length > 0) {
-    // Check if these are component-level rows (have component class or nested structure)
-    const hasComponentRows = pricingTbody.querySelector('tr[data-component], tr.component-row, input[id^="hours-DEL"]');
-    if (hasComponentRows) {
-      // Component table already populated - don't overwrite
-      // Just update the summary elements if needed
-      const scenarios = getScenarioState();
-      if (scenarios && scenarios.A) {
-        updatePricingSummary();
-      }
-      return;
+  if (pricingTbody) {
+    // Always update summary without touching the table
+    const scenarios = getScenarioState();
+    if (scenarios && scenarios.A) {
+      updatePricingSummary();
     }
+    return;  // NEVER overwrite with unified table - let updatePricingDisplay handle rendering
   }
   
   const container = document.getElementById('pricing-container') || document.getElementById('pricing-tbody')?.parentElement?.parentElement;
