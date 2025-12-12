@@ -2333,39 +2333,29 @@ const pricingDataEnhanced = {
   componentTasks: new Map(),    // deliverable_code -> array of tasks
 };
 
-// Pricing view mode: 'traditional' (default) or 'unified'
-// Build Scenario should show traditional view; unified is only for explicit toggle
-let pricingViewMode = 'traditional';
-
 // UNIFIED PRICING TABLE - Fully editable inline version
 // NOTE: This function should NOT overwrite the component-level table from index.html
-// unless explicitly switched to unified mode via toggle
+// when it is already populated with component rows
 function updatePricingTable() {
-  // CRITICAL FIX: Default to traditional view - only show unified if explicitly toggled
-  // The traditional deliverable/component table is rendered by updatePricingDisplay in index.html
+  // Check if the original component table (from index.html) is already populated
+  // If it has component rows, don't replace it with the unified table
   const pricingTbody = document.getElementById('pricing-tbody');
-  
-  // Always update summary regardless of mode
-  const scenarios = getScenarioState();
-  if (scenarios && scenarios.A) {
-    updatePricingSummary();
-  }
-  
-  // If in traditional mode (default), preserve the existing table
-  if (pricingViewMode === 'traditional' && pricingTbody) {
-    // Check if traditional table has content - if so, don't overwrite
-    if (pricingTbody.children.length > 0) {
-      return;  // Traditional table already populated - don't overwrite
+  if (pricingTbody && pricingTbody.children.length > 0) {
+    // Check if these are component-level rows (have component class or nested structure)
+    const hasComponentRows = pricingTbody.querySelector('tr[data-component], tr.component-row, input[id^="hours-DEL"]');
+    if (hasComponentRows) {
+      // Component table already populated - don't overwrite
+      // Just update the summary elements if needed
+      const scenarios = getScenarioState();
+      if (scenarios && scenarios.A) {
+        updatePricingSummary();
+      }
+      return;
     }
   }
   
-  // Only proceed to render unified table if explicitly in unified mode
-  if (pricingViewMode !== 'unified') {
-    return;  // Not in unified mode - let traditional table handle rendering
-  }
-  
   const container = document.getElementById('pricing-container') || document.getElementById('pricing-tbody')?.parentElement?.parentElement;
-  // Note: scenarios already declared above, reuse it
+  const scenarios = getScenarioState();
   if (!container || !scenarios) return;
   
   const scenario = scenarios.A || scenarios[0];
