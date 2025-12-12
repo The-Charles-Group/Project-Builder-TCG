@@ -5994,8 +5994,13 @@ def compress_deliverable_timeline(
                 'duration_business_days': 0,
                 'original_start': start_dt,
                 'original_end': end_dt,
+                'total_hours': 0.0,  # WORKFRONT ALIGNMENT: Track total hours for L2 assignment
             }
             deliverable_children[deliverable_code] = []
+        
+        # WORKFRONT ALIGNMENT: Aggregate hours for L2 deliverable assignment computation
+        task_hours = float(task.get('hours', 0) or 0)
+        deliverable_info[deliverable_code]['total_hours'] += task_hours
         
         info = deliverable_info[deliverable_code]
         if start_dt < info['min_start']:
@@ -6023,7 +6028,8 @@ def compress_deliverable_timeline(
     
     print(f"[Compress] Found {len(sorted_deliverables)} deliverables to chain:")
     for d in sorted_deliverables:
-        print(f"  - {d['code']}: {d['name'][:40]}... ({d['duration_business_days']} business days)")
+        # STEP 4 DEBUG: Log compression metadata for each deliverable (Workfront alignment verification)
+        print(f"[Compress] {d['code']}: biz_days={d['duration_business_days']}, span={d['min_start']}→{d['max_end']}")
     
     compression_map = {}
     current_start = project_start_dt
@@ -6044,7 +6050,8 @@ def compress_deliverable_timeline(
             'new_start': new_start.isoformat(),
             'new_end': new_end.isoformat(),
             'shift_days': shift_days,
-            'duration_business_days': duration
+            'duration_business_days': duration,
+            'total_hours': deliverable.get('total_hours', 0)  # WORKFRONT ALIGNMENT: Hours for L2 assignment
         }
         
         print(f"[Compress] {code}: {old_start} -> {new_start} (shifted {shift_days} days)")
@@ -13756,15 +13763,17 @@ def convert_excel_to_mspdi(
                             duration_days = biz_days
                             print(f"[XML EXPORT] 📏 Deliverable Duration (business days): {name_txt[:40]} = {duration_days} days from compression_map")
                 
-                # Fallback: Calculate from Start/Finish dates (calendar days - legacy behavior)
+                # Fallback: Calculate BUSINESS DAYS from Start/Finish dates (NOT calendar days)
+                # Per Workfront alignment spec: L2 deliverable Duration must always be Mon-Fri business days
                 if not duration_days or duration_days <= 0:
                     try:
                         start_str = uid_to_sched[r["UID"]]["Start"]
                         finish_str = uid_to_sched[r["UID"]]["Finish"]
                         start_dt = datetime.datetime.fromisoformat(start_str.replace('Z', ''))
                         finish_dt = datetime.datetime.fromisoformat(finish_str.replace('Z', ''))
-                        duration_days = max(1, (finish_dt - start_dt).days)
-                        print(f"[XML EXPORT] 📏 Deliverable Duration (calendar fallback): {name_txt[:40]} = {duration_days} days")
+                        # CRITICAL: Use business days (Mon-Fri) not calendar days
+                        duration_days = calculate_business_days_between(start_dt.date(), finish_dt.date())
+                        print(f"[XML EXPORT] 📏 Deliverable Duration (business days fallback): {name_txt[:40]} = {duration_days} days")
                     except Exception as e:
                         duration_days = 1
                         print(f"[XML EXPORT] ⚠️ Duration fallback for {name_txt[:40]}: {e}")
@@ -13773,6 +13782,16 @@ def convert_excel_to_mspdi(
                 duration_days = max(1, int(duration_days or 1))
                 duration_minutes = duration_days * 480  # 8-hour workday
                 SubElement(task, "Duration").text = f"PT{duration_minutes}M"
+                
+                # STEP 4 DEBUG: Log Workfront alignment values for verification
+                # This helps verify that Duration matches the "Working duration (Mon-Fri)" from Step 4 Gantt
+                planned_hours = float(r.get("PlannedWork", 0) or r.get("Hours", 0) or 0)
+                if planned_hours > 0:
+                    work_minutes = int(round(planned_hours * 60))
+                    units = work_minutes / duration_minutes if duration_minutes > 0 else 0
+                    print(f"[XML EXPORT] 📊 Deliverable {name_txt[:30]} ({deliv_code}): "
+                          f"duration_days={duration_days}, duration_minutes={duration_minutes}, "
+                          f"work_hours={planned_hours}, work_minutes={work_minutes}, units={units:.6f}")
                 
                 if TIGHT_WATERFALL_ENABLED:
                     # TIGHT WATERFALL MODE: ASAP for most, SNET for first (start gate)
@@ -14088,12 +14107,91 @@ def convert_excel_to_mspdi(
                 return ".".join(parts[:2])  # L2 = "1.2"
             return wbs
         
+        # WORKFRONT ALIGNMENT: Build L2 deliverable lookup for special assignment handling
+        # L2 deliverables need assignments with Work/Units computed from business-day durations
+        l2_deliverable_uids = set()
+        l2_deliverable_data = {}
+        for r in rows:
+            outline_level = r["WBS"].count(".") + 1
+            if outline_level == 2:  # L2 deliverable
+                l2_deliverable_uids.add(r["UID"])
+                # Get business-day duration from task's DurationMinutes (already computed above)
+                deliv_code = r.get("DeliverableCode", "")
+                planned_hours = float(r.get("PlannedWork", 0) or r.get("Hours", 0) or 0)
+                l2_deliverable_data[r["UID"]] = {
+                    "code": deliv_code,
+                    "hours": planned_hours,
+                    "name": r.get("Name", ""),
+                    "wbs": r["WBS"]
+                }
+        
         # Build assignments for all tasks (including multi-assignment merged tasks)
         assign_uid_counter = 1
         for row in rows:
             task_uid = row["UID"]
             
-            # Skip assignments that reference summary/parent tasks
+            # WORKFRONT ALIGNMENT: Special handling for L2 deliverables
+            # Create assignment with Work/Units computed from business-day duration
+            if task_uid in l2_deliverable_uids:
+                deliv_data = l2_deliverable_data[task_uid]
+                deliv_code = deliv_data["code"]
+                
+                # Get the duration in minutes from uid_to_sched (already set based on business days)
+                sched = uid_to_sched.get(task_uid, {})
+                start_str = sched.get("Start", "")
+                finish_str = sched.get("Finish", "")
+                
+                # Get duration AND hours from compression_metadata (preferred) or row data
+                duration_days = None
+                planned_hours = 0.0
+                if compression_metadata and deliv_code:
+                    comp_map = compression_metadata.get("compression_map", {}) or compression_metadata.get("compression", {}).get("compression_map", {})
+                    if comp_map and deliv_code in comp_map:
+                        duration_days = comp_map[deliv_code].get("duration_business_days")
+                        # CRITICAL: Get total_hours from compression_map (aggregated from child tasks)
+                        planned_hours = float(comp_map[deliv_code].get("total_hours", 0) or 0)
+                
+                # Fallback for hours: use row data
+                if planned_hours <= 0:
+                    planned_hours = deliv_data.get("hours", 0)
+                
+                # Fallback for duration: compute business days from Start/Finish
+                if not duration_days or duration_days <= 0:
+                    try:
+                        start_dt = datetime.datetime.fromisoformat(start_str.replace('Z', ''))
+                        finish_dt = datetime.datetime.fromisoformat(finish_str.replace('Z', ''))
+                        duration_days = calculate_business_days_between(start_dt.date(), finish_dt.date())
+                    except:
+                        duration_days = 1
+                
+                if planned_hours > 0:
+                    duration_days = max(1, int(duration_days or 1))
+                    duration_minutes = duration_days * 480  # 8-hour workday
+                    work_minutes = int(round(planned_hours * 60))
+                    units = work_minutes / duration_minutes if duration_minutes > 0 else 0
+                    
+                    # Create assignment for L2 deliverable
+                    assignment = SubElement(assignments_elem, "Assignment")
+                    SubElement(assignment, "UID").text = str(assign_uid_counter)
+                    assign_uid_counter += 1
+                    
+                    SubElement(assignment, "TaskUID").text = str(task_uid)
+                    SubElement(assignment, "ResourceUID").text = str(res_name_to_uid.get("Unassigned", 1))
+                    SubElement(assignment, "Start").text = start_str
+                    SubElement(assignment, "Finish").text = finish_str
+                    SubElement(assignment, "Units").text = str(units)
+                    SubElement(assignment, "Work").text = f"PT{work_minutes}M"
+                    SubElement(assignment, "Cost").text = "0.00"
+                    
+                    print(f"[XML EXPORT] 📋 L2 Deliverable Assignment: {deliv_data['name'][:30]} ({deliv_code}): "
+                          f"duration_days={duration_days}, work_hours={planned_hours}, "
+                          f"work_minutes={work_minutes}, units={units:.6f}")
+                else:
+                    print(f"[XML EXPORT] ⚠️ L2 Deliverable {deliv_data['name'][:30]} ({deliv_code}): No planned hours, skipping assignment")
+                
+                continue  # Skip normal processing for L2 deliverables
+            
+            # Skip assignments that reference other summary/parent tasks (non-L2)
             if task_uid in summary_task_uids:
                 print(f"[XML EXPORT] 🚫 Skipping assignment for summary task UID {task_uid} (summary tasks should have no assignments)")
                 continue
