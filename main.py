@@ -13227,9 +13227,25 @@ def convert_excel_to_mspdi(
             
             for task_uid, sched in uid_to_sched.items():
                 try:
-                    # Parse the ISO format dates (YYYY-MM-DDTHH:MM:SS)
-                    start_dt = datetime.datetime.fromisoformat(sched["Start"])
-                    finish_dt = datetime.datetime.fromisoformat(sched["Finish"])
+                    # Handle both datetime objects and ISO format strings
+                    start_val = sched["Start"]
+                    finish_val = sched["Finish"]
+                    
+                    # Convert to datetime if needed
+                    if isinstance(start_val, datetime.datetime):
+                        start_dt = start_val
+                    elif isinstance(start_val, str):
+                        start_dt = datetime.datetime.fromisoformat(start_val)
+                    else:
+                        continue
+                    
+                    if isinstance(finish_val, datetime.datetime):
+                        finish_dt = finish_val
+                    elif isinstance(finish_val, str):
+                        finish_dt = datetime.datetime.fromisoformat(finish_val)
+                    else:
+                        continue
+                    
                     all_starts.append(start_dt)
                     all_finishes.append(finish_dt)
                 except (ValueError, KeyError, TypeError):
