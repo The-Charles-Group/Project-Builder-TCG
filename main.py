@@ -13919,8 +13919,9 @@ def convert_excel_to_mspdi(
                         finish_str = uid_to_sched[r["UID"]]["Finish"]
                         start_dt = datetime.datetime.fromisoformat(start_str.replace('Z', ''))
                         finish_dt = datetime.datetime.fromisoformat(finish_str.replace('Z', ''))
-                        # CRITICAL: Use business days (Mon-Fri) not calendar days
-                        duration_days = calculate_business_days_between(start_dt.date(), finish_dt.date())
+                        # Business days inclusive, then -1 for exclusive duration semantics
+                        biz_days_inclusive = calculate_business_days_between(start_dt.date(), finish_dt.date())
+                        duration_days = max(1, biz_days_inclusive - 1)
                         print(f"[XML EXPORT] 📏 Deliverable Duration (business days fallback): {name_txt[:40]} = {duration_days} days")
                     except Exception as e:
                         duration_days = 1
@@ -13932,31 +13933,25 @@ def convert_excel_to_mspdi(
                 SubElement(task, "Duration").text = f"PT{duration_minutes}M"
                 
                 if TIGHT_WATERFALL_ENABLED:
-                    # TIGHT WATERFALL MODE: ASAP for most, SNET for first (start gate)
-                    # FS chain between deliverables is built after all tasks are created
+                    # TIGHT WATERFALL MODE: All deliverables get SNLT constraint (Start No Later Than)
+                    # FS chain between deliverables provides sequencing
                     SubElement(task, "Type").text = "1"  # Fixed Duration
                     SubElement(task, "IsEffortDriven").text = "0"
                     SubElement(task, "ManuallyScheduled").text = "0"  # Explicit auto-scheduling
                     
-                    # TASK 2: First deliverable gets SNET (start gate), others get ASAP
-                    if r["UID"] == first_l2_deliverable_uid:
-                        # First deliverable: SNET constraint with project start date
-                        start_date_str = uid_to_sched[r["UID"]]["Start"]
-                        if isinstance(start_date_str, datetime.datetime):
-                            constraint_date = start_date_str.strftime("%Y-%m-%dT08:00:00")
-                        elif 'T' in str(start_date_str):
-                            date_part = str(start_date_str).split('T')[0]
-                            constraint_date = f"{date_part}T08:00:00"
-                        else:
-                            constraint_date = f"{start_date_str}T08:00:00"
-                        
-                        SubElement(task, "ConstraintType").text = "5"  # Start No Earlier Than
-                        SubElement(task, "ConstraintDate").text = constraint_date
-                        print(f"[TIGHT WATERFALL] 🎯 First deliverable SNET: {name_txt} (WBS {r['WBS']}, Start={constraint_date})")
+                    # All deliverables get ConstraintType=5 (Start No Later Than) per requirement
+                    start_date_str = uid_to_sched[r["UID"]]["Start"]
+                    if isinstance(start_date_str, datetime.datetime):
+                        constraint_date = start_date_str.strftime("%Y-%m-%dT08:00:00")
+                    elif 'T' in str(start_date_str):
+                        date_part = str(start_date_str).split('T')[0]
+                        constraint_date = f"{date_part}T08:00:00"
                     else:
-                        # Subsequent deliverables: ASAP (FS chain will constrain them)
-                        SubElement(task, "ConstraintType").text = "0"  # As Soon As Possible
-                        print(f"[TIGHT WATERFALL] ⛓️ Deliverable with ASAP constraint: {name_txt} (WBS {r['WBS']})")
+                        constraint_date = f"{start_date_str}T08:00:00"
+                    
+                    SubElement(task, "ConstraintType").text = "5"  # Start No Later Than
+                    SubElement(task, "ConstraintDate").text = constraint_date
+                    print(f"[TIGHT WATERFALL] 📋 Deliverable SNLT: {name_txt} (WBS {r['WBS']}, Start={constraint_date})")
                 else:
                     # LEGACY MODE: Manual Scheduling tags to lock parent timelines
                     SubElement(task, "Type").text = "1"  # Fixed Duration
@@ -13967,7 +13962,7 @@ def convert_excel_to_mspdi(
                     SubElement(task, "ManualDuration").text = "1"
                     SubElement(task, "ManualWork").text = "1"
                     
-                    # SNET constraint to lock deliverable start date
+                    # SNLT constraint to lock deliverable timeline
                     start_date_str = uid_to_sched[r["UID"]]["Start"]
                     if 'T' in start_date_str:
                         date_part = start_date_str.split('T')[0]
@@ -13975,38 +13970,36 @@ def convert_excel_to_mspdi(
                     else:
                         constraint_date = f"{start_date_str}T08:00:00"
                     
-                    SubElement(task, "ConstraintType").text = "2"  # Start No Earlier Than
+                    SubElement(task, "ConstraintType").text = "5"  # Start No Later Than
                     SubElement(task, "ConstraintDate").text = constraint_date
                     
-                    print(f"[XML EXPORT] 🔒 Applied SNET constraint to deliverable: {name_txt} (WBS {r['WBS']}, Start={constraint_date})")
+                    print(f"[XML EXPORT] 🔒 Applied SNLT constraint to deliverable: {name_txt} (WBS {r['WBS']}, Start={constraint_date})")
             
             elif is_summary and not is_root:
-                # NON-ROOT SUMMARY TASKS (OutlineLevel 2-5): Calculate actual duration from Start/Finish
+                # NON-ROOT SUMMARY TASKS (OutlineLevel 3+): Calculate actual duration from Start/Finish
                 SubElement(task, "Work").text = "PT0M"
                 
-                # FIX: Calculate actual Duration from Start/Finish dates (not hardcoded PT480M)
-                # This ensures summary task durations match their date spans
+                # Calculate Duration using BUSINESS DAYS (Mon-Fri) to match Workfront
+                # The helper is inclusive of both endpoints, but duration is start-to-finish (exclusive)
+                # So we subtract 1 to get the correct span (e.g., 65 inclusive → 64 duration)
                 try:
                     start_str = uid_to_sched[r["UID"]]["Start"]
                     finish_str = uid_to_sched[r["UID"]]["Finish"]
                     start_dt = datetime.datetime.fromisoformat(start_str.replace('Z', ''))
                     finish_dt = datetime.datetime.fromisoformat(finish_str.replace('Z', ''))
-                    duration_days = max(1, (finish_dt - start_dt).days)
+                    # Business days inclusive count, then -1 for exclusive duration semantics
+                    biz_days_inclusive = calculate_business_days_between(start_dt.date(), finish_dt.date())
+                    duration_days = max(1, biz_days_inclusive - 1)
                     duration_minutes = duration_days * 480  # 8-hour workday
                     SubElement(task, "Duration").text = f"PT{duration_minutes}M"
                 except Exception:
                     # Fallback to 1 day
                     SubElement(task, "Duration").text = "PT480M"
                 
-                # GPT-5 PRO SPEC: Summary tasks (OutlineLevel 2-5) need Type, IsEffortDriven, and Manual Scheduling tags
-                # These lock parent timelines and prevent Workfront from recalculating rolled-up dates
+                # Summary tasks need Type, IsEffortDriven, and ConstraintType
                 SubElement(task, "Type").text = "1"  # Fixed Duration
                 SubElement(task, "IsEffortDriven").text = "0"
-                SubElement(task, "ManuallyScheduled").text = "1"
-                SubElement(task, "ManualStart").text = "1"
-                SubElement(task, "ManualFinish").text = "1"
-                SubElement(task, "ManualDuration").text = "1"
-                SubElement(task, "ManualWork").text = "1"
+                SubElement(task, "ConstraintType").text = "5"  # Start No Later Than (for summaries)
             # Only set Duration/Work for non-summary leaf tasks
             else:
                 # WORKFRONT FIX: Duration MUST equal (Finish - Start) for ALL tasks
@@ -14596,32 +14589,20 @@ def convert_excel_to_mspdi(
                 for task_elem in tasks_elem.findall("Task"):
                     task_uid_elem = task_elem.find("UID")
                     if task_uid_elem is not None and task_uid_elem.text == str(succ_uid):
-                        # VALIDATION: Skip if either task has zero duration (e.g., root task)
-                        succ_duration_elem = task_elem.find("Duration")
-                        if succ_duration_elem is not None and succ_duration_elem.text == "PT0M":
+                        # FIX: Only skip if BOTH tasks are the root task (UID=1)
+                        # Previously skipped all zero-duration tasks, which broke summary dependencies
+                        if int(succ_uid) == 1:
+                            skipped_zero_duration += 1
+                            break
+                        if int(pred_uid) == 1:
                             skipped_zero_duration += 1
                             break
                         
-                        # Find predecessor task to check its duration
-                        pred_task_elem = None
-                        for t_elem in tasks_elem.findall("Task"):
-                            t_uid_elem = t_elem.find("UID")
-                            if t_uid_elem is not None and t_uid_elem.text == str(pred_uid):
-                                pred_task_elem = t_elem
-                                break
-                        
-                        if pred_task_elem is not None:
-                            pred_duration_elem = pred_task_elem.find("Duration")
-                            if pred_duration_elem is not None and pred_duration_elem.text == "PT0M":
-                                skipped_zero_duration += 1
-                                break
-                        
-                        # Both tasks have valid durations - write PredecessorLink
+                        # Write PredecessorLink for all valid task pairs
                         pred_link = SubElement(task_elem, "PredecessorLink")
                         SubElement(pred_link, "PredecessorUID").text = str(pred_uid)
                         SubElement(pred_link, "Type").text = "1"          # 1 = Finish-to-Start
                         SubElement(pred_link, "CrossProject").text = "0"
-                        # Optional but harmless:
                         SubElement(pred_link, "LinkLag").text = "0"
                         SubElement(pred_link, "LagFormat").text = "7"     # 7 = days
                         break
