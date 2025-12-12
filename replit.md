@@ -54,6 +54,7 @@ Preferred communication style: Simple, everyday language.
   2. `convert_excel_to_mspdi` accepts `compression_metadata` parameter and uses `duration_business_days` for L2 deliverable Duration in XML.
   3. Step 4 Gantt popup and bar tooltips show "Working duration (Mon-Fri): X days" in green.
   4. Fallback to calendar days when compression metadata is unavailable.
+  5. **Child Task Extension for Workfront Summary Duration**: Since Workfront recomputes summary task duration from children (ignoring XML Duration values), `compress_deliverable_timeline()` now extends child tasks to span the full deliverable window. The earliest non-milestone child's start is set to `new_start` and the latest child's end is set to `new_end`. This ensures Workfront's calculated duration matches the intended working-day duration (e.g., 64 days instead of ~25 days).
 - **Parallel Processing**: Utilizes OpenAI Vision API for parallel PDF image processing.
 - **Smart Image Analysis**: Two-tier image processing system with pre-filtering and deep analysis.
 - **Session Isolation System**: Complete data isolation between different RFPs using unique session IDs.
