@@ -6066,10 +6066,21 @@ def compress_deliverable_timeline(
         shift_days = mapping['shift_days']
         
         if shift_days == 0:
-            compressed_tasks.append(task)
+            # TICKET: Even unshifted tasks need working duration fields for frontend display
+            task_copy = task.copy()
+            task_copy['timeline_working_duration_days'] = mapping['duration_business_days']
+            task_copy['timeline_start'] = mapping['new_start']
+            task_copy['timeline_end'] = mapping['new_end']
+            compressed_tasks.append(task_copy)
             continue
         
         new_task = task.copy()
+        
+        # TICKET: Add working duration fields to task for frontend display
+        # This ensures "Working duration (Mon-Fri): X days" shows immediately after Generate AI Timeline
+        new_task['timeline_working_duration_days'] = mapping['duration_business_days']
+        new_task['timeline_start'] = mapping['new_start']
+        new_task['timeline_end'] = mapping['new_end']
         
         task_start = task.get('start', '')
         task_end = task.get('end', '')
