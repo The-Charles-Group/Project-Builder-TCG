@@ -13850,15 +13850,16 @@ def convert_excel_to_mspdi(
                             duration_days = biz_days
                             print(f"[XML EXPORT] 📏 Deliverable Duration (business days): {name_txt[:40]} = {duration_days} days from compression_map")
                 
-                # Fallback: Calculate from Start/Finish dates (calendar days - legacy behavior)
+                # Fallback: Calculate BUSINESS DAYS from Start/Finish dates (Mon-Fri only)
                 if not duration_days or duration_days <= 0:
                     try:
                         start_str = uid_to_sched[r["UID"]]["Start"]
                         finish_str = uid_to_sched[r["UID"]]["Finish"]
                         start_dt = datetime.datetime.fromisoformat(start_str.replace('Z', ''))
                         finish_dt = datetime.datetime.fromisoformat(finish_str.replace('Z', ''))
-                        duration_days = max(1, (finish_dt - start_dt).days)
-                        print(f"[XML EXPORT] 📏 Deliverable Duration (calendar fallback): {name_txt[:40]} = {duration_days} days")
+                        # CRITICAL: Use business days (Mon-Fri) not calendar days
+                        duration_days = calculate_business_days_between(start_dt.date(), finish_dt.date())
+                        print(f"[XML EXPORT] 📏 Deliverable Duration (business days fallback): {name_txt[:40]} = {duration_days} days")
                     except Exception as e:
                         duration_days = 1
                         print(f"[XML EXPORT] ⚠️ Duration fallback for {name_txt[:40]}: {e}")
