@@ -13790,18 +13790,10 @@ def convert_excel_to_mspdi(
                     SubElement(working_time, "FromTime").text = start_time
                     SubElement(working_time, "ToTime").text = end_time
 
-        # Resources
-        resources_elem = SubElement(project, "Resources")
-        for res in resources:
-            resource = SubElement(resources_elem, "Resource")
-            SubElement(resource, "UID").text = str(res["UID"])
-            SubElement(resource, "ID").text = str(res["ID"])
-            SubElement(resource, "Name").text = res["Name"]
-            SubElement(resource, "Type").text = "1"  # Work resource
-            # Add StandardRate for pricing
-            role = res.get("Name", "Unassigned")
-            rate = _std_rate_for(role, pricing_mode, rate_band, blended_rate, DB)
-            SubElement(resource, "StandardRate").text = f"{rate:.2f}"
+        # WORKFRONT-SAFE: Skip Resources section entirely
+        # Resources cause import failures - remove them completely
+        # Planned hours stay on tasks via <Work> element
+        print(f"[WORKFRONT-SAFE] Skipping Resources section (no resources exported)")
 
         # WORKFRONT-SAFE COSTTYPE HELPER: Apply FixedCost ONLY to summary/deliverable tasks
         # Leaf tasks should only have CostType=0 (no FixedCost fields) for clean Workfront import
@@ -13857,63 +13849,82 @@ def convert_excel_to_mspdi(
                 parent_wbs_set.add(parent_wbs)
         print(f"[XML EXPORT] Built parent_wbs_set with {len(parent_wbs_set)} parents for Summary flag")
         
-        # Tasks
+        # Tasks - WORKFRONT-SAFE EXPORT MODE
+        # Rules:
+        # - Summary tasks: Summary=1, Work=PT0M, Duration=PT0M, NO Start/Finish/Constraints
+        # - Leaf tasks: Keep Start/Finish/Duration, snap times to 09:00/17:00
         tasks_elem = SubElement(project, "Tasks")
         for task_id, r in enumerate(rows, 1):
             task = SubElement(tasks_elem, "Task")
             SubElement(task, "UID").text = str(r["UID"])
             SubElement(task, "ID").text = str(task_id)
-            # Use "Project Summary" for root task, otherwise use the actual name
+            
             is_root = r["WBS"] == "1"
             name_txt = "Project Summary" if is_root else r["Name"]
             SubElement(task, "Name").text = name_txt
             
-            # IMPORTANT: Keep full WBS paths for uniqueness, only OutlineLevel is capped
-            # Workfront needs full WBS (e.g., "1.2.3.1.1") for unique task identification
-            # But OutlineLevel is capped at 3 for visual hierarchy (Deliverable → Component → Task)
             SubElement(task, "WBS").text = r["WBS"]
             SubElement(task, "OutlineNumber").text = r["WBS"] 
-            SubElement(task, "Start").text = uid_to_sched[r["UID"]]["Start"]
-            SubElement(task, "Finish").text = uid_to_sched[r["UID"]]["Finish"]
             
-            # Calculate outline level EARLY (needed for deliverable detection)
-            outline_level = r["WBS"].count(".") + 1  # 1 for '1', 2 for '1.1', etc.
+            outline_level = r["WBS"].count(".") + 1
             SubElement(task, "OutlineLevel").text = str(outline_level)
             
-            # GPT-5 PRO FIX: Make deliverable/summary mutually exclusive to prevent duplicate ConstraintType tags
-            # WATERFALL FIX: Deliverables are now OutlineLevel=2 (direct children of Project Summary)
-            is_deliverable = outline_level == 2 and not is_root
-            
-            # WORKFRONT-SAFE: Check if task has children using WBS in parent_wbs_set
-            # This is reliable regardless of UID remapping
+            # Determine if this is a summary task (has children)
             has_children = r["WBS"] in parent_wbs_set
-            is_summary = (has_children or is_root) and not is_deliverable
+            is_summary = has_children or is_root
             
-            # WORKFRONT-SAFE: Any task with children MUST have Summary=1
-            # This includes deliverables that have children - Workfront requires this
-            SubElement(task, "Summary").text = "1" if (is_summary or has_children or is_root) else "0"
+            SubElement(task, "Summary").text = "1" if is_summary else "0"
+            SubElement(task, "DurationFormat").text = "7"  # Always auto-scheduled
             
-            # GPT-5 PRO FIX: Conditional DurationFormat based on manual scheduling
-            # TIGHT_WATERFALL: Deliverables use DurationFormat=7 (auto-scheduled) when enabled
-            # Legacy: 53 (Elapsed Days + Manual) for manually scheduled tasks
-            # 7 (Elapsed Days) for auto-scheduled tasks (root, leaf, and deliverables in tight waterfall mode)
-            if TIGHT_WATERFALL_ENABLED and is_deliverable:
-                # TIGHT WATERFALL: Deliverables are auto-scheduled with ASAP constraint
-                is_manually_scheduled = False
-            else:
-                is_manually_scheduled = is_deliverable or (is_summary and not is_root)
-            SubElement(task, "DurationFormat").text = "7"  # Always use auto-scheduled format for Workfront compatibility
-            
-            # GPT-5 PRO FIX: Reordered branches to prevent overlap (root → deliverable → summary → leaf)
-            if is_root:
-                # ROOT TASK (OutlineLevel=1): PT0M duration, no Manual* tags
+            if is_summary:
+                # WORKFRONT-SAFE: Summary tasks have NO Start/Finish/Constraints
+                # Workfront will calculate these from children
                 SubElement(task, "Work").text = "PT0M"
                 SubElement(task, "Duration").text = "PT0M"
-                SubElement(task, "ConstraintType").text = "4"  # Must Start On
-                SubElement(task, "ConstraintDate").text = uid_to_sched[r["UID"]]["Start"]
-                # Root does NOT get Manual* tags or Type/IsEffortDriven per GPT-5 Pro spec
+                # DO NOT set Start, Finish, ConstraintType, or ConstraintDate for summary tasks
+                print(f"[WORKFRONT-SAFE] Summary task (no dates): {name_txt[:40]} (WBS {r['WBS']})")
             
-            elif is_deliverable:
+            else:
+                # LEAF TASK: Has Start, Finish, Duration
+                # Snap times to working hours: Start=09:00:00, Finish=17:00:00
+                start_str = uid_to_sched[r["UID"]]["Start"]
+                finish_str = uid_to_sched[r["UID"]]["Finish"]
+                
+                # Parse dates and snap to working hours
+                try:
+                    start_dt = datetime.datetime.fromisoformat(start_str.replace('Z', ''))
+                    finish_dt = datetime.datetime.fromisoformat(finish_str.replace('Z', ''))
+                except:
+                    start_dt = project_start
+                    finish_dt = project_start + datetime.timedelta(days=1)
+                
+                # WORKFRONT-SAFE: Snap to working hours
+                snapped_start = start_dt.strftime("%Y-%m-%dT09:00:00")
+                snapped_finish = finish_dt.strftime("%Y-%m-%dT17:00:00")
+                
+                SubElement(task, "Start").text = snapped_start
+                SubElement(task, "Finish").text = snapped_finish
+                
+                # Calculate Duration = business_days_between(Start, Finish) × 480
+                duration_days = calculate_business_days_between(start_dt.date(), finish_dt.date())
+                duration_days = max(1, duration_days)  # Minimum 1 day
+                duration_minutes = duration_days * 480  # 8-hour workday
+                SubElement(task, "Duration").text = f"PT{duration_minutes}M"
+                
+                # Work = PlannedHours from Gantt
+                work_hours = uid_to_sched[r['UID']].get('PlannedHours', 0)
+                if pd.isna(work_hours):
+                    work_hours = 0
+                work_minutes = max(0, int(work_hours * 60))
+                SubElement(task, "Work").text = f"PT{work_minutes}M"
+                
+                print(f"[WORKFRONT-SAFE] Leaf task: {name_txt[:40]} Start={snapped_start[:10]} Finish={snapped_finish[:10]} Dur={duration_days}d Work={work_hours}h")
+            
+            # Skip remaining complex branching - simplified for Workfront-Safe export
+            continue  # Move to next task
+            
+            # === LEGACY CODE BELOW - SKIPPED ===
+            if False and is_deliverable:
                 # DELIVERABLE TASKS (OutlineLevel=2)
                 # TIGHT WATERFALL: ASAP constraint, no Manual* tags, FS chain (built later)
                 # LEGACY: SNET constraint + Manual* tags if has children
@@ -14233,128 +14244,10 @@ def convert_excel_to_mspdi(
                 
                 print(f"[XML EXPORT] ⚓ Created finish anchor for deliverable: {r['Name']} (WBS {r['WBS']}) → Last leaf: {last_leaf['Name']} (UID {last_leaf['UID']}, WBS {last_leaf['WBS']}), Finish={finish_date})")
 
-        # Assignments
-        # CRITICAL FIX: Filter out assignments for summary/parent tasks
-        # Summary tasks should have NO assignments - Workfront will roll up from children
-        # Build set of summary task UIDs by checking which tasks have children
-        summary_task_uids = set()
-        wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
-        for parent_wbs in children_by_parent.keys():
-            if parent_wbs in wbs_to_uid:
-                summary_task_uids.add(wbs_to_uid[parent_wbs])
-        # Also add root task
-        if "1" in wbs_to_uid:
-            summary_task_uids.add(wbs_to_uid["1"])
-        
-        assignments_elem = SubElement(project, "Assignments")
-        
-        # BACKWARD COMPATIBILITY: Build deliverable FixedCost lookup
-        # Only zero assignment costs when parent deliverable has FixedCost > 0
-        deliverable_fixed_costs = {}
-        for r in rows:
-            outline_level = r["WBS"].count(".") + 1
-            if outline_level == 2:  # Deliverable level
-                fixed_cost = float(r.get("FixedCost", 0))
-                deliverable_fixed_costs[r["WBS"]] = fixed_cost
-        
-        def get_deliverable_wbs(wbs):
-            """Get the L2 deliverable WBS for any task WBS."""
-            parts = wbs.split(".")
-            if len(parts) >= 2:
-                return ".".join(parts[:2])  # L2 = "1.2"
-            return wbs
-        
-        # Build assignments for all tasks (including multi-assignment merged tasks)
-        assign_uid_counter = 1
-        for row in rows:
-            task_uid = row["UID"]
-            
-            # Skip assignments that reference summary/parent tasks
-            if task_uid in summary_task_uids:
-                print(f"[XML EXPORT] 🚫 Skipping assignment for summary task UID {task_uid} (summary tasks should have no assignments)")
-                continue
-            
-            # Check if this is a multi-assignment merged task
-            if row.get("multi_assignment") and "assignments" in row:
-                # Multi-assignment task - create multiple Assignment elements
-                for assign_data in row["assignments"]:
-                    assignment = SubElement(assignments_elem, "Assignment")
-                    SubElement(assignment, "UID").text = str(assign_uid_counter)
-                    assign_uid_counter += 1
-                    
-                    SubElement(assignment, "TaskUID").text = str(task_uid)
-                    
-                    # Find resource UID for this role
-                    resource_name = assign_data["resource_name"]
-                    res_uid = res_name_to_uid.get(resource_name) or res_name_to_uid.get("Unassigned")
-                    SubElement(assignment, "ResourceUID").text = str(res_uid)
-                    
-                    SubElement(assignment, "Start").text = uid_to_sched[task_uid]["Start"]
-                    SubElement(assignment, "Finish").text = uid_to_sched[task_uid]["Finish"]
-                    
-                    # Compute Units and Work
-                    work_hours = assign_data["work_hours"]
-                    work_min = work_hours * 60
-                    dur_hours = uid_to_sched[task_uid].get('DurationHours', 0)
-                    dur_min = dur_hours * 60
-                    # Use actual duration for accurate Units calculation (no 480-minute rounding)
-                    units = 0 if dur_min == 0 else work_min / dur_min
-                    
-                    SubElement(assignment, "Units").text = str(units)
-                    SubElement(assignment, "Work").text = f"PT{int(work_min)}M"
-                    
-                    # BACKWARD COMPATIBILITY: Zero cost only if parent deliverable has FixedCost
-                    # Otherwise, use hourly rate calculation (legacy behavior)
-                    deliv_wbs = get_deliverable_wbs(row.get("WBS", ""))
-                    parent_fixed_cost = deliverable_fixed_costs.get(deliv_wbs, 0)
-                    if parent_fixed_cost > 0:
-                        SubElement(assignment, "Cost").text = "0.00"
-                    else:
-                        # Fallback to hourly calculation
-                        rate = _std_rate_for(resource_name, pricing_mode, rate_band, blended_rate, DB)
-                        cost = work_hours * rate
-                        SubElement(assignment, "Cost").text = f"{cost:.2f}"
-                    
-                print(f"[XML EXPORT] 👥 Created {len(row['assignments'])} assignments for multi-assignment task: {row['Name'][:50]} (UID {task_uid})")
-            else:
-                # Single-assignment task - use original logic
-                # Find the assignment for this task from the pre-built assignments list
-                task_assignments = [a for a in assignments if a["TaskUID"] == task_uid]
-                
-                for assign in task_assignments:
-                    assignment = SubElement(assignments_elem, "Assignment")
-                    SubElement(assignment, "UID").text = str(assign_uid_counter)
-                    assign_uid_counter += 1
-                    
-                    SubElement(assignment, "TaskUID").text = str(task_uid)
-                    res_uid = assign["ResourceUID"]
-                    SubElement(assignment, "ResourceUID").text = str(res_uid)
-                    SubElement(assignment, "Start").text = assign["Start"]
-                    SubElement(assignment, "Finish").text = assign["Finish"]
-                    
-                    # Compute Units = work_min / dur_min for Fixed Duration tasks
-                    work_hours = assign['WorkHours']
-                    work_min = work_hours * 60
-                    dur_hours = uid_to_sched[task_uid].get('DurationHours', 0)
-                    dur_min = dur_hours * 60
-                    # Use actual duration for accurate Units calculation (no 480-minute rounding)
-                    units = 0 if dur_min == 0 else work_min / dur_min
-                    
-                    SubElement(assignment, "Units").text = str(units)
-                    SubElement(assignment, "Work").text = f"PT{int(work_min)}M"
-                    
-                    # BACKWARD COMPATIBILITY: Zero cost only if parent deliverable has FixedCost
-                    # Otherwise, use hourly rate calculation (legacy behavior)
-                    deliv_wbs = get_deliverable_wbs(row.get("WBS", ""))
-                    parent_fixed_cost = deliverable_fixed_costs.get(deliv_wbs, 0)
-                    if parent_fixed_cost > 0:
-                        SubElement(assignment, "Cost").text = "0.00"
-                    else:
-                        # Fallback to hourly calculation
-                        res_name = next((r["Name"] for r in resources if r["UID"] == res_uid), "Unassigned")
-                        rate = _std_rate_for(res_name, pricing_mode, rate_band, blended_rate, DB)
-                        cost = work_hours * rate
-                        SubElement(assignment, "Cost").text = f"{cost:.2f}"
+        # WORKFRONT-SAFE: Skip Assignments section entirely
+        # Assignments cause import failures - remove them completely
+        # Planned hours stay on tasks via <Work> element
+        print(f"[WORKFRONT-SAFE] Skipping Assignments section (no assignments exported)")
 
         # WORKFRONT FIX: Add PredecessorLinks for:
         # 1. Deliverable-level dependencies (OutlineLevel ≤4 to ≤4)
