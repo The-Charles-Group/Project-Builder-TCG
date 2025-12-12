@@ -14022,19 +14022,27 @@ def convert_excel_to_mspdi(
                 
                 SubElement(task, "Work").text = f"PT{work_minutes}M"
                 
-                # DURATION FIX: Ensure Work ≤ Duration using ceil(hours/8) formula
-                # This fixes "11 hours in 0.12 days" issue by guaranteeing sufficient duration
-                work_hours = work_minutes / 60.0
+                # WORKFRONT DURATION FIX: Duration MUST equal business-day span between Start/Finish
+                # This prevents Workfront from recalculating dates on import
+                # The previous ceil(hours/8) logic caused Workfront to compress timelines
                 
-                if work_hours == 0:
-                    # Milestone: zero duration
+                # Convert to dates for business day calculation
+                start_date = start_dt.date()
+                finish_date = finish_dt.date()
+                
+                # Calculate business days (Mon-Fri) between start and finish
+                duration_days = calculate_business_days_between(start_date, finish_date)
+                
+                # Safety: If duration is 0 or negative but there's work, force 1 day minimum
+                if duration_days <= 0 and work_minutes > 0:
+                    duration_days = 1
+                
+                # True milestone: zero duration when no work AND zero span
+                if duration_days <= 0 and work_minutes == 0:
                     dur_minutes = 0
                 else:
-                    # Regular task: required_days = max(1, ceil(hours / 8.0))
-                    # Uses 8-hour workday aligned with MinutesPerDay=480
-                    import math
-                    required_days = max(1, math.ceil(work_hours / 8.0))
-                    dur_minutes = required_days * 480
+                    # Business days × 8 hours × 60 minutes = PT{dur}M
+                    dur_minutes = duration_days * 480
                 
                 SubElement(task, "Duration").text = f"PT{dur_minutes}M"
                 
