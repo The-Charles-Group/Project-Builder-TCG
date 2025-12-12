@@ -1,0 +1,145 @@
+B. WHY WORKFRONT IS FAILING NOW (clear + specific)
+
+Your XML is valid XML (it parses), but Workfront’s importer is much stricter than XML validity.
+
+There are four things in your current export that commonly cause Workfront’s “we can’t read the file” error when combined:
+
+1. Tasks with children but Summary=0
+
+You have tasks like:
+
+<Task>
+  <UID>2</UID>
+  <Name>Brand Identity Development</Name>
+  <OutlineLevel>2</OutlineLevel>
+  <Summary>0</Summary>
+  <!-- but it HAS children -->
+</Task>
+
+
+Workfront is very sensitive to this.
+If a task has children, it must be:
+
+<Summary>1</Summary>
+
+
+Workfront itself always exports summary parents with Summary=1.
+Your earlier files sometimes slipped through; now they’re not.
+
+Fix (mandatory):
+
+Any task that has children → set <Summary>1</Summary>
+
+Do not set Duration/Work on those summary tasks (WF will roll them up).
+
+2. Leaf task Duration does not match Start/Finish
+
+You’ve improved this, but some tasks still violate it.
+
+Example pattern in your file:
+
+<Start>2026-01-05T08:00:00</Start>
+<Finish>2026-01-10T15:31:12</Finish>
+<Duration>PT2400M</Duration>  <!-- 5 days -->
+
+
+But earlier versions mixed:
+
+duration from hours (ceil(hours/8))
+
+finish from calendar span
+
+When Workfront sees inconsistent math, it may refuse the file entirely instead of re‑planning.
+
+Rule Workfront expects:
+
+Duration == working time between Start and Finish
+
+No exceptions.
+
+3. Split workdays (08–12 / 13–17)
+
+Your calendar uses two working blocks per day.
+
+Workfront exports single‑block days (09–17) and is much happier with them.
+
+Split days are legal MSPDI, but Workfront import + recalculation + assignments + costs = high failure risk.
+
+Fast fix:
+Use one block per day:
+
+<WorkingTime>
+  <FromTime>09:00:00</FromTime>
+  <ToTime>17:00:00</ToTime>
+</WorkingTime>
+
+4. Extra cost fields on non‑summary tasks
+
+You’re emitting things like:
+
+<CostType>2</CostType>
+<FixedCost>63000.00</FixedCost>
+<FixedCostAccrual>3</FixedCostAccrual>
+
+
+Workfront can handle these — but combined with assignments + durations + calendar math, this often trips the importer.
+
+Recommendation:
+
+Only put FixedCost on summary (deliverable) tasks
+
+Keep leaf tasks with:
+
+CostType=0
+
+no FixedCost fields
+
+C. THE SAFE EXPORT PROFILE (what to tell Replit)
+
+If you want Workfront imports to be boring and reliable, tell the Replit team to add a “Workfront‑Safe Export” mode:
+
+✅ Mandatory rules
+
+Summary tasks
+
+Summary=1
+
+No Work, no Duration, no Assignments
+
+Leaf tasks
+
+Summary=0
+
+Duration = business days between Start/Finish × 480
+
+Work ≤ Duration
+
+No FixedCost fields
+
+Calendar
+
+Single working block per weekday (09–17)
+
+No split shifts
+
+Encoding
+
+Always export with:
+
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+
+
+If in doubt
+
+Let Start + Finish define Duration, not hours
+
+This matches what Workfront itself exports and re‑imports cleanly.
+
+D. About the 25 days vs 64 days (so this doesn’t haunt you)
+
+64 working days = schedule span (Jan 5 → Apr 2)
+
+25 days = Workfront’s Simple Duration (hours ÷ its internal hours/day)
+
+Those are different metrics in Workfront.
+Once the file imports cleanly again, we can make that distinction explicit in the app UI so nobody thinks it’s “wrong”.

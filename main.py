@@ -12093,7 +12093,7 @@ def convert_excel_to_mspdi(
     start_date_mode: str = "next_monday",
     fixed_start_iso: Optional[str] = None,
     hours_per_day: float = 8.0,
-    calendar_blocks: List[Tuple[str, str]] = [("08:00:00","12:00:00"), ("13:00:00","17:00:00")],
+    calendar_blocks: List[Tuple[str, str]] = [("09:00:00","17:00:00")],  # WORKFRONT-SAFE: Single block
     roles_split_rule: str = "even",
     role_weights: Optional[Dict[str, float]] = None,
     preserve_predecessors: str = "normalize",
@@ -13803,10 +13803,16 @@ def convert_excel_to_mspdi(
             rate = _std_rate_for(role, pricing_mode, rate_band, blended_rate, DB)
             SubElement(resource, "StandardRate").text = f"{rate:.2f}"
 
-        # HYBRID COSTTYPE HELPER: Apply CostType based on FixedCost for ALL task types
-        # This ensures monthly retainer children, deliverables, and all tasks get proper cost handling
-        def apply_costtype_and_fixedcost(task_elem, row_dict, task_name=""):
-            # Check multiple field names for price (Step 3 uses price_usd, export prep may use FixedCost)
+        # WORKFRONT-SAFE COSTTYPE HELPER: Apply FixedCost ONLY to summary/deliverable tasks
+        # Leaf tasks should only have CostType=0 (no FixedCost fields) for clean Workfront import
+        def apply_costtype_and_fixedcost(task_elem, row_dict, task_name="", is_summary_task=False):
+            # WORKFRONT-SAFE: Only apply FixedCost to summary/deliverable tasks
+            # Leaf tasks always get CostType=0 with NO FixedCost fields
+            if not is_summary_task:
+                SubElement(task_elem, "CostType").text = "0"  # Role Hourly (default for leaves)
+                return
+            
+            # Summary/deliverable tasks: Apply FixedCost if present
             fixed_cost = float(
                 row_dict.get("FixedCost") or
                 row_dict.get("Price_USD") or
@@ -13842,6 +13848,15 @@ def convert_excel_to_mspdi(
                 first_l2_deliverable_uid = l2_candidates[0]["uid"]
                 print(f"[TIGHT WATERFALL] 🎯 First L2 deliverable UID={first_l2_deliverable_uid} (WBS {l2_candidates[0]['wbs']}) will use SNET constraint")
 
+        # WORKFRONT-SAFE FIX: Build reliable parent WBS set from rows data
+        # This avoids issues with summary_set being UID-based after remapping
+        parent_wbs_set = set()
+        for row in rows:
+            parent_wbs = row.get("ParentWBS")
+            if parent_wbs:
+                parent_wbs_set.add(parent_wbs)
+        print(f"[XML EXPORT] Built parent_wbs_set with {len(parent_wbs_set)} parents for Summary flag")
+        
         # Tasks
         tasks_elem = SubElement(project, "Tasks")
         for task_id, r in enumerate(rows, 1):
@@ -13868,8 +13883,15 @@ def convert_excel_to_mspdi(
             # GPT-5 PRO FIX: Make deliverable/summary mutually exclusive to prevent duplicate ConstraintType tags
             # WATERFALL FIX: Deliverables are now OutlineLevel=2 (direct children of Project Summary)
             is_deliverable = outline_level == 2 and not is_root
-            is_summary = (r["WBS"] in summary_set or is_root) and not is_deliverable
-            SubElement(task, "Summary").text = "1" if is_summary else "0"
+            
+            # WORKFRONT-SAFE: Check if task has children using WBS in parent_wbs_set
+            # This is reliable regardless of UID remapping
+            has_children = r["WBS"] in parent_wbs_set
+            is_summary = (has_children or is_root) and not is_deliverable
+            
+            # WORKFRONT-SAFE: Any task with children MUST have Summary=1
+            # This includes deliverables that have children - Workfront requires this
+            SubElement(task, "Summary").text = "1" if (is_summary or has_children or is_root) else "0"
             
             # GPT-5 PRO FIX: Conditional DurationFormat based on manual scheduling
             # TIGHT_WATERFALL: Deliverables use DurationFormat=7 (auto-scheduled) when enabled
@@ -14095,9 +14117,10 @@ def convert_excel_to_mspdi(
             is_anchor = str(r.get("WBS", "")).startswith("ANCHOR_")
             SubElement(task, "Milestone").text = "1" if is_anchor else "0"
             
-            # UNIVERSAL COSTTYPE: Apply hybrid CostType logic to ALL tasks (deliverables, summaries, leaves, monthly children)
-            # This ensures any task with FixedCost > 0 gets CostType=2, all others get CostType=0 (Role Hourly)
-            apply_costtype_and_fixedcost(task, r, name_txt)
+            # WORKFRONT-SAFE COSTTYPE: Only apply FixedCost to summary/deliverable tasks
+            # Leaf tasks get CostType=0 with no FixedCost fields for clean Workfront import
+            is_summary_for_cost = has_children or is_summary or is_deliverable
+            apply_costtype_and_fixedcost(task, r, name_txt, is_summary_task=is_summary_for_cost)
 
         # WORKFRONT FIX: Add finish anchor milestones for preserved DELIVERABLES
         # This locks the deliverable's finish date by creating a zero-duration milestone
