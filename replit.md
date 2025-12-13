@@ -56,6 +56,7 @@ Preferred communication style: Simple, everyday language.
   4. Assignment rollups: `AssignmentRollups` model with `calculate_rollups()` function for aggregations by deliverable, component, role, and assignee.
   5. SCENARIO_STORE persistence updated to handle both legacy flat and nested formats with auto-detect via `_recompute_totals_auto()`.
   6. New API endpoints: `/api/scenario/rollups/{session_id}` for assignment aggregations, `/api/scenario/nested/{session_id}` for nested format access.
+  7. **XML/MSPDI Export Nested Structure Support (Dec 2025)**: `build_wbs_with_pricing()` now traverses nested structure when available. Detects `components` array in scenario items, iterates over nested `tasks` and `assignments` instead of DB lookups. Preserves user edits from Step 3 UI through the export pipeline. Fallback to legacy DB-based path for backward compatibility.
 - **Workfront Duration Alignment (Dec 2025)**: Step 4 UI and MSP/XML exports now use business-day durations matching Workfront's "Duration" column:
   1. `/api/timeline/save` populates `timeline_working_duration_days` (Mon-Fri business days) and `timeline_span_calendar_days` from compression_map.
   2. `convert_excel_to_mspdi` accepts `compression_metadata` parameter and uses `duration_business_days` for L2 deliverable Duration in XML.

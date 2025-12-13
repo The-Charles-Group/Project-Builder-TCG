@@ -4585,55 +4585,120 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                           f"monthly_children=structural_only (0 hours) "
                           f"total_price={target_price} cadence={billing_cadence}")
 
-            comps = DB.components_for_deliverable(dcode, tg_order)
-            # Robust fallback if DB returns no components
-            if not comps:
-                sub = DB.all_rows[DB.all_rows["Deliverable_Code"].astype(str)==str(dcode)]
-                if not sub.empty:
-                    comps = sorted({str(x) for x in sub["Component"].dropna().astype(str) if str(x).strip() and str(x).strip() != "nan"})
+            # ============================================================
+            # NESTED STRUCTURE SUPPORT: Check for nested components in item
+            # If the item has nested components (from nested schema), use those
+            # instead of DB lookups. This preserves user edits from Step 3.
+            # ============================================================
+            nested_components = d.get("components")
+            use_nested_path = (
+                nested_components and 
+                isinstance(nested_components, list) and 
+                len(nested_components) > 0 and
+                isinstance(nested_components[0], dict)
+            )
+            
+            if use_nested_path:
+                # Use nested structure path - components come from scenario item
+                print(f"[WBS Builder] Using NESTED structure for {dcode} with {len(nested_components)} components")
+                # Build component list with consistent fallback naming
+                comps = []
+                base_comp_hours_display = {}
+                for i, comp_data in enumerate(nested_components):
+                    # Use consistent fallback: name -> canonical_key -> generated Component_N
+                    comp_name = (
+                        comp_data.get("name") or 
+                        comp_data.get("canonical_key") or 
+                        f"Component_{i}"
+                    )
+                    comps.append(comp_name)
+                    # Component hours: check for explicit hours or sum from tasks
+                    comp_hours = comp_data.get("hours", 0)
+                    if not comp_hours and comp_data.get("tasks"):
+                        comp_hours = sum(t.get("hours", 0) for t in comp_data.get("tasks", []))
+                    base_comp_hours_display[comp_name] = int(round(comp_hours))
+                    # Store the resolved name back for consistent lookup in component loop
+                    comp_data["_resolved_name"] = comp_name
+            else:
+                # Legacy DB-based path
+                comps = DB.components_for_deliverable(dcode, tg_order)
+                # Robust fallback if DB returns no components
                 if not comps:
-                    comps = ["Work Package"]
+                    sub = DB.all_rows[DB.all_rows["Deliverable_Code"].astype(str)==str(dcode)]
+                    if not sub.empty:
+                        comps = sorted({str(x) for x in sub["Component"].dropna().astype(str) if str(x).strip() and str(x).strip() != "nan"})
+                    if not comps:
+                        comps = ["Work Package"]
             
             # GPT 5.1 Pro: Check for component_hours overrides from Step 3 edits
             # These are user-edited component hours that should override DB-calculated values
-            component_overrides = d.get("component_hours") or d.get("component_hours_override") or {}
-            
-            if component_overrides:
-                # Normalize keys to strings to match DB component labels
-                overrides = {str(k): float(v) for k, v in component_overrides.items()}
-                override_total = sum(overrides.values())
+            # SKIP this block for nested path since base_comp_hours_display is already set from nested data
+            if not use_nested_path:
+                component_overrides = d.get("component_hours") or d.get("component_hours_override") or {}
                 
-                if override_total > 0:
-                    # Trust the overrides as the TOTAL; also align parent hours with sum
-                    parent_hours_display = int(round(override_total))
-                    set_hours_on_item(d, override_total)
+                if component_overrides:
+                    # Normalize keys to strings to match DB component labels
+                    overrides = {str(k): float(v) for k, v in component_overrides.items()}
+                    override_total = sum(overrides.values())
                     
-                    # Use overrides directly (no DB-based proportional scaling)
-                    base_comp_hours_display = {k: int(round(v)) for k, v in overrides.items()}
-                    print(f"[WBS Builder] Using component_hours overrides for {dcode}: {base_comp_hours_display}")
+                    if override_total > 0:
+                        # Trust the overrides as the TOTAL; also align parent hours with sum
+                        parent_hours_display = int(round(override_total))
+                        set_hours_on_item(d, override_total)
+                        
+                        # Use overrides directly (no DB-based proportional scaling)
+                        base_comp_hours_display = {k: int(round(v)) for k, v in overrides.items()}
+                        print(f"[WBS Builder] Using component_hours overrides for {dcode}: {base_comp_hours_display}")
+                    else:
+                        # Fallback to current DB-based logic
+                        comp_hours_map_month_raw = DB.hours_by_component(dcode, tg_order, scen_col)
+                        comp_hours_map_scaled = {k: v * hours_scale for k, v in comp_hours_map_month_raw.items()}
+                        base_comp_hours_display = _largest_remainder(parent_hours_display, comp_hours_map_scaled)
                 else:
-                    # Fallback to current DB-based logic
+                    # No overrides -> legacy behaviour (DB-based proportional scaling)
                     comp_hours_map_month_raw = DB.hours_by_component(dcode, tg_order, scen_col)
                     comp_hours_map_scaled = {k: v * hours_scale for k, v in comp_hours_map_month_raw.items()}
                     base_comp_hours_display = _largest_remainder(parent_hours_display, comp_hours_map_scaled)
-            else:
-                # No overrides -> legacy behaviour (DB-based proportional scaling)
-                comp_hours_map_month_raw = DB.hours_by_component(dcode, tg_order, scen_col)
-                comp_hours_map_scaled = {k: v * hours_scale for k, v in comp_hours_map_month_raw.items()}
-                base_comp_hours_display = _largest_remainder(parent_hours_display, comp_hours_map_scaled)
 
             prev_comp_wbs = ""
 
             for j, comp in enumerate(comps, start=1):
-                # SCALING: Apply hours_scale to task group hours within component
-                tg_hours_in_comp_raw = DB.hours_by_taskgroup_for_component(dcode, comp, tg_order, scen_col)
-                tg_hours_in_comp = {tg: hrs * hours_scale for tg, hrs in tg_hours_in_comp_raw.items()}
-                tg_in_comp = sorted({tg for tg in tg_order if tg in tg_hours_in_comp})
+                # ============================================================
+                # Get component data - nested path provides component dict directly
+                # ============================================================
+                nested_comp_data = None
+                if use_nested_path:
+                    # Find matching component data from nested structure using resolved name
+                    for nc in nested_components:
+                        resolved = nc.get("_resolved_name") or nc.get("name") or ""
+                        if resolved == comp:
+                            nested_comp_data = nc
+                            break
+                
+                # Get tasks/task groups for this component
+                if use_nested_path and nested_comp_data and nested_comp_data.get("tasks"):
+                    # NESTED PATH: Use tasks from nested structure
+                    nested_tasks = nested_comp_data.get("tasks", [])
+                    tg_in_comp = [t.get("label", t.get("task_group", f"Task_{i}")) for i, t in enumerate(nested_tasks)]
+                    tg_hours_in_comp = {t.get("label", t.get("task_group", f"Task_{i}")): float(t.get("hours", 0)) 
+                                        for i, t in enumerate(nested_tasks)}
+                    print(f"[WBS Builder] Using NESTED tasks for {dcode}/{comp}: {len(nested_tasks)} tasks")
+                else:
+                    # LEGACY PATH: Use DB lookup
+                    tg_hours_in_comp_raw = DB.hours_by_taskgroup_for_component(dcode, comp, tg_order, scen_col)
+                    tg_hours_in_comp = {tg: hrs * hours_scale for tg, hrs in tg_hours_in_comp_raw.items()}
+                    tg_in_comp = sorted({tg for tg in tg_order if tg in tg_hours_in_comp})
+                
                 if not tg_in_comp:
                     continue
 
-                comp_offset = min(offset_by_tg[tg] for tg in tg_in_comp)
-                comp_duration = sum(int(duration_by_tg.get(tg, 1)) for tg in tg_in_comp)
+                # Calculate offsets - use defaults for nested path
+                if use_nested_path and nested_comp_data:
+                    comp_offset = 0  # Simplified for nested - real offset comes from timeline
+                    comp_duration = 1
+                else:
+                    comp_offset = min(offset_by_tg[tg] for tg in tg_in_comp) if tg_in_comp else 0
+                    comp_duration = sum(int(duration_by_tg.get(tg, 1)) for tg in tg_in_comp)
 
                 # Use SCALED hours for component
                 # FIX: parent_hours_display (137) is already the TOTAL for the entire retainer
@@ -4644,8 +4709,11 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 comp_hours_per_month = comp_hours_total_display / months if months > 0 else comp_hours_total_display
 
                 wbs_comp = f"{wbs_deliv}.{j}"
-                svc_comp = (DB.service_department_for_component(dcode, comp, tg_in_comp)
-                            or DB.service_dept_for_component(dcode, comp, tg_in_comp, scen_col))
+                if use_nested_path:
+                    svc_comp = nested_comp_data.get("department", "") if nested_comp_data else ""
+                else:
+                    svc_comp = (DB.service_department_for_component(dcode, comp, tg_in_comp)
+                                or DB.service_dept_for_component(dcode, comp, tg_in_comp, scen_col))
                 
                 # ZERO COST: All cost comes from deliverable FixedCost, not component/task costs
                 rows.append({
@@ -4690,8 +4758,20 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                     # enumerates tasks within this month
                     prev_task_last_wbs = ""
                     for k, tg in enumerate(tg_in_comp, start=1):
-                        dur = int(duration_by_tg.get(tg, 1))
-                        label_core = DB.task_label_for_component_tg(dcode, comp, tg) if hasattr(DB, "task_label_for_component_tg") else tg
+                        # Get task data - nested path provides task dict
+                        nested_task_data = None
+                        if use_nested_path and nested_comp_data and nested_comp_data.get("tasks"):
+                            # Find matching task in nested structure
+                            for nt in nested_comp_data.get("tasks", []):
+                                if nt.get("label", nt.get("task_group", "")) == tg:
+                                    nested_task_data = nt
+                                    break
+                        
+                        dur = int(duration_by_tg.get(tg, 1)) if not use_nested_path else 1
+                        if use_nested_path:
+                            label_core = tg  # Task label is already in tg
+                        else:
+                            label_core = DB.task_label_for_component_tg(dcode, comp, tg) if hasattr(DB, "task_label_for_component_tg") else tg
                         # For monthly retainers: use plain label (no Month prefix) - template cycle only
                         # For other cadences with months: keep Month XX prefix for task repetition
                         label = label_core if is_monthly_retainer else ((f"Month {month_idx:02d} – {label_core}") if months else label_core)
@@ -4700,11 +4780,17 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                         task_ordinal = (month_idx-1)*total_tasks_per_month + k
                         wbs_task = f"{wbs_comp}.{task_ordinal}"
 
-                        base_offset = dstart + offset_by_tg[tg] + ((month_idx-1) * total_deliv_duration)
+                        if use_nested_path:
+                            base_offset = dstart  # Simplified for nested
+                        else:
+                            base_offset = dstart + offset_by_tg.get(tg, 0) + ((month_idx-1) * total_deliv_duration)
 
                         # ZERO COST: All cost comes from deliverable FixedCost
                         rows.append({
-                            "Row_ID": "", "Deliverable_Code": dcode, "Task_Code": "", "Service_Department": svc_comp,
+                            "Row_ID": nested_task_data.get("row_id", "") if nested_task_data else "",
+                            "Deliverable_Code": dcode, 
+                            "Task_Code": nested_task_data.get("task_code", "") if nested_task_data else "",
+                            "Service_Department": svc_comp,
                             "Deliverable": deliv_label,
                             "Project_Name": project_name, "WBS_ID": wbs_task, "Parent_WBS_ID": wbs_comp,
                             "Task_Name": label, "Component": comp, "Task": label,
@@ -4719,26 +4805,43 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                             "FixedCost": 0   # No FixedCost on tasks - only on deliverable
                         })
 
-                        # Role rows for this task in this month
-                        hrs_role_df = DB.hours_by_role_for_component_task(dcode, comp, tg, scen_col)
-                        role_rows = hrs_role_df.to_dict(orient="records")
+                        # ============================================================
+                        # Role/Assignment rows for this task
+                        # Nested path uses assignments from task; legacy uses DB lookup
+                        # ============================================================
                         target_task_hours = int(tg_target.get(tg, 0))
+                        
+                        if use_nested_path and nested_task_data and nested_task_data.get("assignments"):
+                            # NESTED PATH: Use assignments from task structure
+                            assignments = nested_task_data.get("assignments", [])
+                            flo = {}
+                            for asgn in assignments:
+                                role = asgn.get("role", "")
+                                sen = asgn.get("seniority", "Mid")
+                                hrs = float(asgn.get("allocation_hours", 0))
+                                if hrs > 0:
+                                    flo[(role, sen)] = int(round(hrs))
+                            print(f"[WBS Builder] Using NESTED assignments for {dcode}/{comp}/{tg}: {len(assignments)} assignments")
+                        else:
+                            # LEGACY PATH: Use DB lookup for role hours
+                            hrs_role_df = DB.hours_by_role_for_component_task(dcode, comp, tg, scen_col)
+                            role_rows = hrs_role_df.to_dict(orient="records")
 
-                        raw_map = {(r["Resource_Title"], r["Seniority"]): float(r["Hours"]) for r in role_rows}
-                        if not raw_map:
-                            raw_map = {("","Mid"): float(target_task_hours)}
-                        total = sum(raw_map.values()) or 1.0
-                        raw_scaled = {key: (val/total)*target_task_hours for key, val in raw_map.items()}
-                        flo = {key: int(val) for key, val in raw_scaled.items()}
-                        rem = target_task_hours - sum(flo.values())
-                        order = sorted(raw_map.keys(), key=lambda kk: (raw_scaled[kk]-flo[kk]), reverse=True)
-                        for kk in order[:max(0, rem)]:
-                            flo[kk] += 1
+                            raw_map = {(r["Resource_Title"], r["Seniority"]): float(r["Hours"]) for r in role_rows}
+                            if not raw_map:
+                                raw_map = {("","Mid"): float(target_task_hours)}
+                            total = sum(raw_map.values()) or 1.0
+                            raw_scaled = {key: (val/total)*target_task_hours for key, val in raw_map.items()}
+                            flo = {key: int(val) for key, val in raw_scaled.items()}
+                            rem = target_task_hours - sum(flo.values())
+                            order = sorted(raw_map.keys(), key=lambda kk: (raw_scaled[kk]-flo[kk]), reverse=True)
+                            for kk in order[:max(0, rem)]:
+                                flo[kk] += 1
                         
                         # Debug logging for retainer role allocation
                         if is_monthly_retainer:
                             role_sum = sum(flo.values())
-                            print(f"[RETAINER DEBUG] {dcode}/{comp}/{tg}: target_task_hours={target_task_hours}, role_sum={role_sum}, raw_map={raw_map}")
+                            print(f"[RETAINER DEBUG] {dcode}/{comp}/{tg}: target_task_hours={target_task_hours}, role_sum={role_sum}")
 
                         prev_role_wbs = ""
                         r_index = 0
@@ -4746,9 +4849,14 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                             if h <= 0:
                                 continue
                             r_index += 1
-                            row_id, task_code, svc_task_v2 = DB.codes_for_component_task_role(dcode, comp, tg, role or "", sen or "", scen_col)
-                            # Prefer v3 service_department_for_task (no scen_col dependency)
-                            svc_task = DB.service_department_for_task(dcode, comp, tg) or svc_task_v2
+                            if use_nested_path:
+                                row_id = ""
+                                task_code = nested_task_data.get("task_code", "") if nested_task_data else ""
+                                svc_task = svc_comp
+                            else:
+                                row_id, task_code, svc_task_v2 = DB.codes_for_component_task_role(dcode, comp, tg, role or "", sen or "", scen_col)
+                                # Prefer v3 service_department_for_task (no scen_col dependency)
+                                svc_task = DB.service_department_for_task(dcode, comp, tg) or svc_task_v2
                             wbs_role = f"{wbs_task}.{r_index}"
 
                             row_hours = int(h)
