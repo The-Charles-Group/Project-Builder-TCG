@@ -22,6 +22,7 @@ from models import (
 )
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -782,7 +783,7 @@ def _save_scenario_to_db(session_id: str, state: Dict[str, Any]) -> bool:
                 VALUES (%s, %s, CURRENT_TIMESTAMP)
                 ON CONFLICT (session_id) 
                 DO UPDATE SET scenario_data = EXCLUDED.scenario_data, updated_at = CURRENT_TIMESTAMP
-            """, (session_id, Json(state)))
+            """, (session_id, Json(jsonable_encoder(state))))
         conn.commit()
         print(f"[DB] Saved scenario for session {session_id}")
         return True
