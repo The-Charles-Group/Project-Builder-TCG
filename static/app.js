@@ -4982,29 +4982,32 @@ function openTaskAssignmentEditor(taskKey) {
   
   const assignmentsHTML = assignments.length > 0 
     ? assignments.map((asgn, idx) => `
-        <div class="assignment-row" data-idx="${idx}" style="display: flex; gap: 10px; margin-bottom: 10px; align-items: center;">
-          <input type="text" value="${asgn.role || ''}" placeholder="Role" 
-                 style="flex: 2; padding: 8px; border: 1px solid rgba(106,163,255,0.3); border-radius: 6px; 
-                        background: rgba(0,0,0,0.2); color: var(--text);" />
-          <select style="flex: 1; padding: 8px; border: 1px solid rgba(106,163,255,0.3); border-radius: 6px; 
-                         background: rgba(0,0,0,0.2); color: var(--text);">
+        <div class="assignment-row" data-idx="${idx}" style="display: flex; gap: 8px; margin-bottom: 10px; align-items: center; flex-wrap: wrap;">
+          <input type="text" value="${(asgn.assignee || '').replace(/"/g, '&quot;')}" placeholder="Assignee Name" 
+                 style="flex: 1.5; min-width: 100px; padding: 8px; border: 1px solid rgba(16,185,129,0.3); border-radius: 6px; 
+                        background: rgba(0,0,0,0.2); color: var(--text);" data-field="assignee" />
+          <input type="text" value="${(asgn.role || '').replace(/"/g, '&quot;')}" placeholder="Role" 
+                 style="flex: 1.5; min-width: 100px; padding: 8px; border: 1px solid rgba(106,163,255,0.3); border-radius: 6px; 
+                        background: rgba(0,0,0,0.2); color: var(--text);" data-field="role" />
+          <select style="flex: 1; min-width: 80px; padding: 8px; border: 1px solid rgba(106,163,255,0.3); border-radius: 6px; 
+                         background: rgba(0,0,0,0.2); color: var(--text);" data-field="seniority">
             <option value="Junior" ${asgn.seniority === 'Junior' ? 'selected' : ''}>Junior</option>
             <option value="Mid" ${asgn.seniority === 'Mid' ? 'selected' : ''}>Mid</option>
             <option value="Senior" ${asgn.seniority === 'Senior' ? 'selected' : ''}>Senior</option>
             <option value="Director" ${asgn.seniority === 'Director' ? 'selected' : ''}>Director</option>
           </select>
           <input type="number" value="${asgn.allocation_hours || asgn.hours || 0}" placeholder="Hours" min="0" step="0.5"
-                 style="width: 70px; padding: 8px; border: 1px solid rgba(106,163,255,0.3); border-radius: 6px; 
-                        background: rgba(0,0,0,0.2); color: var(--text); text-align: center;" />
+                 style="width: 65px; padding: 8px; border: 1px solid rgba(106,163,255,0.3); border-radius: 6px; 
+                        background: rgba(0,0,0,0.2); color: var(--text); text-align: center;" data-field="hours" />
           <input type="number" value="${asgn.rate || 210}" placeholder="Rate" min="0" step="5"
-                 style="width: 80px; padding: 8px; border: 1px solid rgba(106,163,255,0.3); border-radius: 6px; 
-                        background: rgba(0,0,0,0.2); color: var(--text); text-align: center;" />
+                 style="width: 70px; padding: 8px; border: 1px solid rgba(106,163,255,0.3); border-radius: 6px; 
+                        background: rgba(0,0,0,0.2); color: var(--text); text-align: center;" data-field="rate" />
           <button onclick="this.parentElement.remove()" 
                   style="padding: 6px 10px; background: rgba(220,38,38,0.2); border: 1px solid rgba(220,38,38,0.4); 
                          border-radius: 4px; color: #dc2626; cursor: pointer;">✕</button>
         </div>
       `).join('')
-    : '<div style="color: var(--muted); font-style: italic; padding: 10px;">No assignments yet</div>';
+    : '<div style="color: var(--muted); font-style: italic; padding: 10px;">No assignments yet. Click + Add Assignment to get started.</div>';
   
   modal.innerHTML = `
     <div style="background: var(--card); padding: 24px; border-radius: 12px; max-width: 700px; width: 90%; 
@@ -5048,31 +5051,38 @@ function openTaskAssignmentEditor(taskKey) {
   
   document.getElementById('btn-add-assignment').onclick = () => {
     const container = document.getElementById('assignments-container');
+    const noAssignmentsMsg = container.querySelector('[style*="font-style: italic"]');
+    if (noAssignmentsMsg) noAssignmentsMsg.remove();
+    
     const newRow = document.createElement('div');
     newRow.className = 'assignment-row';
-    newRow.style.cssText = 'display: flex; gap: 10px; margin-bottom: 10px; align-items: center;';
+    newRow.style.cssText = 'display: flex; gap: 8px; margin-bottom: 10px; align-items: center; flex-wrap: wrap;';
     newRow.innerHTML = `
+      <input type="text" value="" placeholder="Assignee Name" 
+             style="flex: 1.5; min-width: 100px; padding: 8px; border: 1px solid rgba(16,185,129,0.3); border-radius: 6px; 
+                    background: rgba(0,0,0,0.2); color: var(--text);" data-field="assignee" />
       <input type="text" value="" placeholder="Role" 
-             style="flex: 2; padding: 8px; border: 1px solid rgba(106,163,255,0.3); border-radius: 6px; 
-                    background: rgba(0,0,0,0.2); color: var(--text);" />
-      <select style="flex: 1; padding: 8px; border: 1px solid rgba(106,163,255,0.3); border-radius: 6px; 
-                     background: rgba(0,0,0,0.2); color: var(--text);">
+             style="flex: 1.5; min-width: 100px; padding: 8px; border: 1px solid rgba(106,163,255,0.3); border-radius: 6px; 
+                    background: rgba(0,0,0,0.2); color: var(--text);" data-field="role" />
+      <select style="flex: 1; min-width: 80px; padding: 8px; border: 1px solid rgba(106,163,255,0.3); border-radius: 6px; 
+                     background: rgba(0,0,0,0.2); color: var(--text);" data-field="seniority">
         <option value="Junior">Junior</option>
         <option value="Mid" selected>Mid</option>
         <option value="Senior">Senior</option>
         <option value="Director">Director</option>
       </select>
       <input type="number" value="0" placeholder="Hours" min="0" step="0.5"
-             style="width: 70px; padding: 8px; border: 1px solid rgba(106,163,255,0.3); border-radius: 6px; 
-                    background: rgba(0,0,0,0.2); color: var(--text); text-align: center;" />
+             style="width: 65px; padding: 8px; border: 1px solid rgba(106,163,255,0.3); border-radius: 6px; 
+                    background: rgba(0,0,0,0.2); color: var(--text); text-align: center;" data-field="hours" />
       <input type="number" value="210" placeholder="Rate" min="0" step="5"
-             style="width: 80px; padding: 8px; border: 1px solid rgba(106,163,255,0.3); border-radius: 6px; 
-                    background: rgba(0,0,0,0.2); color: var(--text); text-align: center;" />
+             style="width: 70px; padding: 8px; border: 1px solid rgba(106,163,255,0.3); border-radius: 6px; 
+                    background: rgba(0,0,0,0.2); color: var(--text); text-align: center;" data-field="rate" />
       <button onclick="this.parentElement.remove()" 
               style="padding: 6px 10px; background: rgba(220,38,38,0.2); border: 1px solid rgba(220,38,38,0.4); 
                      border-radius: 4px; color: #dc2626; cursor: pointer;">✕</button>
     `;
     container.appendChild(newRow);
+    newRow.querySelector('input').focus();
   };
   
   document.getElementById('btn-save-assignments').onclick = () => {
@@ -5080,22 +5090,27 @@ function openTaskAssignmentEditor(taskKey) {
     const newAssignments = [];
     
     rows.forEach(row => {
-      const inputs = row.querySelectorAll('input, select');
-      if (inputs.length >= 4) {
-        const role = inputs[0].value.trim();
-        const seniority = inputs[1].value;
-        const hours = parseFloat(inputs[2].value) || 0;
-        const rate = parseFloat(inputs[3].value) || 210;
-        
-        if (role && hours > 0) {
-          newAssignments.push({
-            role,
-            seniority,
-            allocation_hours: hours,
-            rate,
-            price: hours * rate
-          });
-        }
+      const assigneeInput = row.querySelector('[data-field="assignee"]');
+      const roleInput = row.querySelector('[data-field="role"]');
+      const senioritySelect = row.querySelector('[data-field="seniority"]');
+      const hoursInput = row.querySelector('[data-field="hours"]');
+      const rateInput = row.querySelector('[data-field="rate"]');
+      
+      const assignee = assigneeInput?.value?.trim() || '';
+      const role = roleInput?.value?.trim() || '';
+      const seniority = senioritySelect?.value || 'Mid';
+      const hours = parseFloat(hoursInput?.value) || 0;
+      const rate = parseFloat(rateInput?.value) || 210;
+      
+      if ((role || assignee) && hours > 0) {
+        newAssignments.push({
+          assignee,
+          role,
+          seniority,
+          allocation_hours: hours,
+          rate,
+          price: hours * rate
+        });
       }
     });
     
