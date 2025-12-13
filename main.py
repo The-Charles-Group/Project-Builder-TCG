@@ -12,6 +12,14 @@ from xml.etree.ElementTree import Element, SubElement, tostring
 from xml.dom import minidom
 from post_export import post_process_xml
 from ai_weighted_matcher import score_rfp
+from models import (
+    Assignment, Task, Component, Deliverable, NestedScenario,
+    AssignmentRollups, calculate_rollups,
+    legacy_item_to_deliverable, convert_legacy_scenario_to_nested,
+    nested_scenario_to_legacy, is_nested_format, ensure_nested_format,
+    generate_task_canonical_key, generate_component_canonical_key,
+    generate_assignment_canonical_key
+)
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -917,8 +925,8 @@ def set_baseline_and_scenario(session_id: str, scenario: dict):
     if "totals" not in scenario:
         scenario["totals"] = {"hours": 0.0, "price": 0.0}
     
-    # Recompute totals to ensure consistency
-    scenario = _recompute_totals(scenario)
+    # Recompute totals to ensure consistency (auto-detect format)
+    scenario = _recompute_totals_auto(scenario)
     
     state = {
         "baseline": copy.deepcopy(scenario),
@@ -945,8 +953,8 @@ def update_working_scenario(session_id: str, scenario: dict) -> dict:
     """
     state = get_session_state(session_id)
     
-    # Recompute totals
-    scenario = _recompute_totals(scenario)
+    # Recompute totals (auto-detect format)
+    scenario = _recompute_totals_auto(scenario)
     
     state["scenario"] = scenario
     state["totals"] = scenario.get("totals", {"hours": 0.0, "price": 0.0})
@@ -975,7 +983,7 @@ def reset_scenario_from_baseline(session_id: str) -> dict:
     
     # Deep copy baseline to working scenario
     reset_scenario = copy.deepcopy(state["baseline"])
-    reset_scenario = _recompute_totals(reset_scenario)
+    reset_scenario = _recompute_totals_auto(reset_scenario)
     
     state["scenario"] = reset_scenario
     state["totals"] = reset_scenario.get("totals", {"hours": 0.0, "price": 0.0})
@@ -1012,9 +1020,34 @@ def get_working_scenario(session_id: str) -> dict:
     return scenario
 
 def has_baseline(session_id: str) -> bool:
-    """Check if a baseline exists for this session."""
+    """Check if a baseline exists for this session (supports both formats)."""
     state = get_session_state(session_id)
-    return state.get("baseline") is not None and bool(state["baseline"].get("items"))
+    baseline = state.get("baseline")
+    if baseline is None:
+        return False
+    if baseline.get("items"):
+        return True
+    if baseline.get("deliverables"):
+        return True
+    return False
+
+def get_nested_scenario(session_id: str) -> NestedScenario:
+    """
+    Get the working scenario as a NestedScenario object.
+    Auto-converts from legacy format if necessary.
+    """
+    scenario_dict = get_working_scenario(session_id)
+    if not scenario_dict or not (scenario_dict.get("items") or scenario_dict.get("deliverables")):
+        return NestedScenario()
+    
+    return convert_legacy_scenario_to_nested(scenario_dict)
+
+def get_assignment_rollups(session_id: str) -> AssignmentRollups:
+    """
+    Get assignment rollups for the current working scenario.
+    """
+    nested = get_nested_scenario(session_id)
+    return calculate_rollups(nested)
 
 def _norm_str(s: Any) -> str:
     """Normalize a string for key matching: strip, lowercase."""
@@ -1132,6 +1165,97 @@ def _recompute_totals(scn: dict) -> dict:
     scn["totals"]["price"] = round(total_price, 2)
     
     return scn
+
+def _recompute_totals_nested(scn: dict) -> dict:
+    """
+    Recompute totals for a nested-format scenario.
+    Uses bottom-up rollup: assignment → task → component → deliverable → scenario.
+    
+    Args:
+        scn: Scenario dict in nested format (has 'deliverables' with 'components'/'tasks')
+        
+    Returns:
+        Updated scenario dict with recomputed totals at all levels
+    """
+    if "deliverables" not in scn and "items" in scn:
+        items = scn.get("items", [])
+        if not items or not isinstance(items[0].get("components"), list):
+            return _recompute_totals(scn)
+    
+    deliverables = scn.get("deliverables") or scn.get("items", [])
+    total_hours = 0.0
+    total_price = 0.0
+    
+    for deliverable in deliverables:
+        if not deliverable.get("selected", True):
+            continue
+            
+        deliv_hours = 0.0
+        deliv_price = 0.0
+        
+        components = deliverable.get("components", [])
+        for component in components:
+            comp_hours = 0.0
+            comp_price = 0.0
+            
+            tasks = component.get("tasks", [])
+            for task in tasks:
+                task_hours = 0.0
+                task_price = 0.0
+                
+                assignments = task.get("assignments", [])
+                if assignments:
+                    for asgn in assignments:
+                        asgn_hours = float(asgn.get("allocation_hours", 0) or 0)
+                        asgn_rate = float(asgn.get("rate", 0) or 0)
+                        asgn_price = asgn_hours * asgn_rate
+                        asgn["price"] = round(asgn_price, 2)
+                        task_hours += asgn_hours
+                        task_price += asgn_price
+                else:
+                    task_hours = float(task.get("hours", 0) or 0)
+                    task_rate = float(task.get("rate", 0) or 0)
+                    task_price = task_hours * task_rate
+                
+                task["hours"] = round(task_hours, 2)
+                task["price"] = round(task_price, 2)
+                if task_hours > 0:
+                    task["rate"] = round(task_price / task_hours, 2)
+                
+                comp_hours += task_hours
+                comp_price += task_price
+            
+            component["hours"] = round(comp_hours, 2)
+            component["price"] = round(comp_price, 2)
+            if comp_hours > 0:
+                component["rate"] = round(comp_price / comp_hours, 2)
+            
+            deliv_hours += comp_hours
+            deliv_price += comp_price
+        
+        deliverable["total_hours"] = round(deliv_hours, 2)
+        deliverable["hours"] = round(deliv_hours, 2)
+        deliverable["price"] = round(deliv_price, 2)
+        if deliv_hours > 0:
+            deliverable["rate"] = round(deliv_price / deliv_hours, 2)
+        
+        total_hours += deliv_hours
+        total_price += deliv_price
+    
+    if "totals" not in scn:
+        scn["totals"] = {}
+    scn["totals"]["hours"] = round(total_hours, 2)
+    scn["totals"]["price"] = round(total_price, 2)
+    
+    return scn
+
+def _recompute_totals_auto(scn: dict) -> dict:
+    """
+    Auto-detect format and recompute totals using appropriate method.
+    """
+    if is_nested_format(scn):
+        return _recompute_totals_nested(scn)
+    return _recompute_totals(scn)
 
 # ---------- Rate/Hours Utility Helpers (Backward Compatible) ----------
 
@@ -7909,6 +8033,58 @@ async def api_scenario_exists(session_id: str):
         "session_id": session_id,
         "info": scenario_info
     }
+
+@app.get("/api/scenario/rollups/{session_id}")
+async def api_scenario_rollups(session_id: str):
+    """
+    Get assignment rollups for a scenario (by deliverable, component, role, assignee).
+    Supports both legacy flat format and nested format.
+    """
+    try:
+        rollups = get_assignment_rollups(session_id)
+        return {
+            "success": True,
+            "session_id": session_id,
+            "rollups": {
+                "by_deliverable": [r.model_dump() for r in rollups.by_deliverable],
+                "by_component": [r.model_dump() for r in rollups.by_component],
+                "by_role": [r.model_dump() for r in rollups.by_role],
+                "by_assignee": [r.model_dump() for r in rollups.by_assignee],
+                "total_hours": rollups.total_hours,
+                "total_price": rollups.total_price
+            }
+        }
+    except Exception as e:
+        print(f"[ROLLUPS] Error calculating rollups: {e}")
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500
+        )
+
+@app.get("/api/scenario/nested/{session_id}")
+async def api_scenario_nested(session_id: str):
+    """
+    Get the working scenario in nested format (Deliverable → Component → Task → Assignment).
+    Auto-converts from legacy format if necessary.
+    """
+    try:
+        nested = get_nested_scenario(session_id)
+        return {
+            "success": True,
+            "session_id": session_id,
+            "scenario": nested.model_dump(),
+            "totals": {
+                "hours": nested.total_hours,
+                "price": nested.total_price,
+                "effective_rate": nested.effective_rate
+            }
+        }
+    except Exception as e:
+        print(f"[NESTED] Error getting nested scenario: {e}")
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500
+        )
 
 # Clean up old sessions periodically (24 hours)
 @app.post("/api/scenario/cleanup")

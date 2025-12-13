@@ -49,6 +49,13 @@ Preferred communication style: Simple, everyday language.
   5. Frontend `window.SCENARIO_A` is the single source of truth for pricing; no dependency on ScenarioStore for sync.
   6. `forceSync=true` on exports always syncs to backend regardless of dirty flags.
 - **PostgreSQL Database Persistence (Dec 2025)**: SCENARIO_STORE now persists to PostgreSQL, resolving in-memory data loss on server restarts. Uses `scenario_store` table with session_id, scenario_data JSONB, baseline_data JSONB, totals JSONB, and timestamps. Functions: `_save_scenario_to_db()`, `_load_scenario_from_db()`. Component hours edits survive server restarts through the sync→export pipeline.
+- **Nested Hierarchy Refactoring (Dec 2025)**: New schema models in `models.py` supporting Deliverable → Component → Task → Assignment hierarchy. Features:
+  1. Pydantic models: `Assignment`, `Task`, `Component`, `Deliverable`, `NestedScenario` with bottom-up rollup calculations.
+  2. Conversion utilities: `legacy_item_to_deliverable()`, `convert_legacy_scenario_to_nested()`, `nested_scenario_to_legacy()`, `is_nested_format()`, `ensure_nested_format()`.
+  3. Canonical key generation: `generate_task_canonical_key()`, `generate_component_canonical_key()`, `generate_assignment_canonical_key()`.
+  4. Assignment rollups: `AssignmentRollups` model with `calculate_rollups()` function for aggregations by deliverable, component, role, and assignee.
+  5. SCENARIO_STORE persistence updated to handle both legacy flat and nested formats with auto-detect via `_recompute_totals_auto()`.
+  6. New API endpoints: `/api/scenario/rollups/{session_id}` for assignment aggregations, `/api/scenario/nested/{session_id}` for nested format access.
 - **Workfront Duration Alignment (Dec 2025)**: Step 4 UI and MSP/XML exports now use business-day durations matching Workfront's "Duration" column:
   1. `/api/timeline/save` populates `timeline_working_duration_days` (Mon-Fri business days) and `timeline_span_calendar_days` from compression_map.
   2. `convert_excel_to_mspdi` accepts `compression_metadata` parameter and uses `duration_business_days` for L2 deliverable Duration in XML.
