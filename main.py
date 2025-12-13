@@ -13225,29 +13225,41 @@ def convert_excel_to_mspdi(
             all_starts = []
             all_finishes = []
             
+            def parse_date_flexible(val):
+                """Parse date from datetime object or string, handling various formats.
+                Preserves wall-clock time and strips tzinfo for consistent comparisons.
+                All dates in a project are assumed to be in the same timezone."""
+                if isinstance(val, datetime.datetime):
+                    # Strip tzinfo but keep wall-clock time
+                    return val.replace(tzinfo=None)
+                if isinstance(val, str):
+                    # Strip timezone suffix to get just the wall-clock datetime
+                    val_clean = val.replace('Z', '')
+                    # Remove positive offset (+HH:MM)
+                    if '+' in val_clean:
+                        val_clean = val_clean.split('+')[0]
+                    # Remove negative offset (-HH:MM after time portion)
+                    if 'T' in val_clean:
+                        t_idx = val_clean.index('T')
+                        # Check for timezone dash after the time part (not date dashes)
+                        after_t = val_clean[t_idx:]
+                        if '-' in after_t:
+                            # Timezone offset is at end, format: HH:MM:SS-HH:MM
+                            val_clean = val_clean[:t_idx] + after_t.rsplit('-', 1)[0]
+                    # Handle dates without seconds (e.g., 2026-01-05T09:00)
+                    if len(val_clean) == 16:  # YYYY-MM-DDTHH:MM
+                        val_clean += ':00'
+                    return datetime.datetime.fromisoformat(val_clean)
+                return None
+            
             for task_uid, sched in uid_to_sched.items():
                 try:
-                    # Handle both datetime objects and ISO format strings
-                    start_val = sched["Start"]
-                    finish_val = sched["Finish"]
+                    start_dt = parse_date_flexible(sched.get("Start"))
+                    finish_dt = parse_date_flexible(sched.get("Finish"))
                     
-                    # Convert to datetime if needed
-                    if isinstance(start_val, datetime.datetime):
-                        start_dt = start_val
-                    elif isinstance(start_val, str):
-                        start_dt = datetime.datetime.fromisoformat(start_val)
-                    else:
-                        continue
-                    
-                    if isinstance(finish_val, datetime.datetime):
-                        finish_dt = finish_val
-                    elif isinstance(finish_val, str):
-                        finish_dt = datetime.datetime.fromisoformat(finish_val)
-                    else:
-                        continue
-                    
-                    all_starts.append(start_dt)
-                    all_finishes.append(finish_dt)
+                    if start_dt and finish_dt:
+                        all_starts.append(start_dt)
+                        all_finishes.append(finish_dt)
                 except (ValueError, KeyError, TypeError):
                     # Skip tasks with invalid dates
                     continue
