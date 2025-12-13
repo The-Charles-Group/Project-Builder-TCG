@@ -1,15 +1,21 @@
 """
 Server-Sent Events (SSE) streaming for real-time progress updates
 Fixes the 0% progress bar issue by streaming updates immediately
+
+Enhanced with job lifecycle stages for nested hierarchy operations:
+- Scenario building (deliverable → component → task → assignment)
+- Pricing updates and cascading recalculations
+- Timeline generation and optimization
+- Export operations (XML, XLSX, CSV)
 """
 
 import json
 import asyncio
 import time
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Callable
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 router = APIRouter()
@@ -23,9 +29,72 @@ class StreamJobStatus(str, Enum):
     FAILED = "failed"
     CANCELLED = "cancelled"
 
+
+# Job types for distinguishing different operations
+class StreamJobType(str, Enum):
+    RFP_ANALYSIS = "rfp_analysis"
+    SCENARIO_BUILD = "scenario_build"
+    PRICING_SYNC = "pricing_sync"
+    TIMELINE_GENERATION = "timeline_generation"
+    EXPORT = "export"
+    ASSIGNMENT_UPDATE = "assignment_update"
+    GENERAL = "general"
+
+
+# Predefined lifecycle stages for different job types
+JOB_LIFECYCLE_STAGES: Dict[str, List[str]] = {
+    "rfp_analysis": [
+        "parsing_document",
+        "extracting_requirements",
+        "matching_deliverables",
+        "scoring_matches",
+        "generating_recommendations",
+        "finalizing_results"
+    ],
+    "scenario_build": [
+        "loading_selections",
+        "building_deliverables",
+        "building_components",
+        "building_tasks",
+        "calculating_rollups",
+        "syncing_to_store"
+    ],
+    "pricing_sync": [
+        "reading_edits",
+        "validating_changes",
+        "cascading_updates",
+        "recalculating_totals",
+        "persisting_changes"
+    ],
+    "timeline_generation": [
+        "initialization",
+        "analyzing_deliverables",
+        "creating_dependencies",
+        "optimizing_schedule",
+        "ai_reasoning",
+        "compressing_timeline",
+        "finalizing"
+    ],
+    "export": [
+        "preparing_data",
+        "generating_structure",
+        "writing_output",
+        "validating_export"
+    ],
+    "assignment_update": [
+        "locating_assignment",
+        "applying_changes",
+        "cascading_to_task",
+        "cascading_to_component",
+        "cascading_to_deliverable",
+        "syncing_totals"
+    ]
+}
+
+
 @dataclass
 class StreamJob:
-    """Job state for SSE streaming"""
+    """Job state for SSE streaming with lifecycle tracking"""
     job_id: str
     status: StreamJobStatus
     progress: float = 0.0
@@ -37,6 +106,9 @@ class StreamJob:
     result: Optional[Any] = None
     error: Optional[str] = None
     start_time: float = 0.0
+    job_type: str = "general"
+    stages_completed: List[str] = field(default_factory=list)
+    sub_progress: float = 0.0  # Progress within current stage (0-100)
     
     def to_sse_event(self) -> str:
         """Convert job state to SSE event format"""
@@ -49,8 +121,20 @@ class StreamJob:
             "processed_items": self.processed_items,
             "current_stage": self.current_stage,
             "eta_seconds": round(self.eta_seconds, 1) if self.eta_seconds else None,
-            "elapsed_seconds": round(time.time() - self.start_time, 1) if self.start_time else 0
+            "elapsed_seconds": round(time.time() - self.start_time, 1) if self.start_time else 0,
+            "job_type": self.job_type,
+            "stages_completed": self.stages_completed,
+            "sub_progress": round(self.sub_progress, 1)
         }
+        
+        # Include lifecycle info if job type has defined stages
+        if self.job_type in JOB_LIFECYCLE_STAGES:
+            stages = JOB_LIFECYCLE_STAGES[self.job_type]
+            data["lifecycle"] = {
+                "stages": stages,
+                "current_index": stages.index(self.current_stage) if self.current_stage in stages else -1,
+                "total_stages": len(stages)
+            }
         
         # Include result only if completed
         if self.status == StreamJobStatus.COMPLETED and self.result:
@@ -84,17 +168,143 @@ def update_sse_job(job_id: str, **kwargs):
             remaining = job.total_items - job.processed_items
             job.eta_seconds = remaining * avg_time_per_item
 
-def create_sse_job(job_id: str, total_items: int = 0) -> StreamJob:
-    """Create a new SSE job"""
+def create_sse_job(
+    job_id: str, 
+    total_items: int = 0,
+    job_type: str = "general",
+    message: str = "Job created, preparing to start..."
+) -> StreamJob:
+    """Create a new SSE job with optional job type for lifecycle tracking"""
     job = StreamJob(
         job_id=job_id,
         status=StreamJobStatus.QUEUED,
         total_items=total_items,
         start_time=time.time(),
-        message="Job created, preparing to start..."
+        message=message,
+        job_type=job_type,
+        stages_completed=[],
+        sub_progress=0.0
     )
     SSE_JOB_STORE[job_id] = job
     return job
+
+
+def advance_sse_stage(
+    job_id: str,
+    new_stage: str,
+    message: Optional[str] = None,
+    sub_progress: float = 0.0
+) -> bool:
+    """
+    Advance a job to a new lifecycle stage.
+    Automatically marks the previous stage as completed and calculates progress.
+    
+    Args:
+        job_id: The job ID
+        new_stage: The new stage to transition to
+        message: Optional message to display
+        sub_progress: Progress within the new stage (0-100)
+    
+    Returns:
+        True if stage was advanced, False if job not found
+    """
+    if job_id not in SSE_JOB_STORE:
+        return False
+    
+    job = SSE_JOB_STORE[job_id]
+    
+    # Mark previous stage as completed
+    if job.current_stage and job.current_stage not in job.stages_completed:
+        job.stages_completed.append(job.current_stage)
+    
+    # Update to new stage
+    job.current_stage = new_stage
+    job.sub_progress = sub_progress
+    job.status = StreamJobStatus.PROCESSING
+    
+    if message:
+        job.message = message
+    else:
+        # Generate a readable message from stage name
+        job.message = new_stage.replace("_", " ").title() + "..."
+    
+    # Calculate overall progress based on lifecycle stages
+    if job.job_type in JOB_LIFECYCLE_STAGES:
+        stages = JOB_LIFECYCLE_STAGES[job.job_type]
+        if new_stage in stages:
+            stage_index = stages.index(new_stage)
+            base_progress = (stage_index / len(stages)) * 100
+            stage_contribution = (1 / len(stages)) * 100
+            job.progress = base_progress + (sub_progress / 100) * stage_contribution
+    
+    return True
+
+
+def complete_sse_job(
+    job_id: str,
+    result: Optional[Any] = None,
+    message: str = "Completed successfully"
+) -> bool:
+    """
+    Mark a job as completed with optional result.
+    
+    Args:
+        job_id: The job ID
+        result: Optional result data to include
+        message: Completion message
+    
+    Returns:
+        True if job was completed, False if job not found
+    """
+    if job_id not in SSE_JOB_STORE:
+        return False
+    
+    job = SSE_JOB_STORE[job_id]
+    
+    # Mark current stage as completed
+    if job.current_stage and job.current_stage not in job.stages_completed:
+        job.stages_completed.append(job.current_stage)
+    
+    job.status = StreamJobStatus.COMPLETED
+    job.progress = 100.0
+    job.sub_progress = 100.0
+    job.message = message
+    job.result = result
+    job.current_stage = "completed"
+    
+    return True
+
+
+def fail_sse_job(
+    job_id: str,
+    error: str,
+    message: Optional[str] = None
+) -> bool:
+    """
+    Mark a job as failed with error details.
+    
+    Args:
+        job_id: The job ID
+        error: Error message/details
+        message: Optional user-friendly message
+    
+    Returns:
+        True if job was marked as failed, False if job not found
+    """
+    if job_id not in SSE_JOB_STORE:
+        return False
+    
+    job = SSE_JOB_STORE[job_id]
+    job.status = StreamJobStatus.FAILED
+    job.error = error
+    job.message = message or f"Failed: {error[:100]}"
+    
+    return True
+
+
+def get_sse_job(job_id: str) -> Optional[StreamJob]:
+    """Get a job by ID, or None if not found."""
+    return SSE_JOB_STORE.get(job_id)
 
 async def sse_event_generator(job_id: str, check_main_store: bool = True):
     """
