@@ -3389,6 +3389,261 @@ class AgencyDB:
 
         return (row_id, task_code, service)
 
+    def build_nested_deliverable(
+        self, deliverable_code: str, included_task_groups: List[str], 
+        scenario_col: str, rate_band: str = "Standard_US"
+    ) -> Deliverable:
+        """
+        Build a nested Deliverable structure from Excel data.
+        
+        This method creates the full hierarchy:
+        Deliverable → Component → Task → Assignment
+        
+        Uses canonical key generation for stable IDs across runs.
+        
+        Args:
+            deliverable_code: The deliverable code (e.g., 'DEL-0001')
+            included_task_groups: Task groups to include
+            scenario_col: Scenario column for hours (e.g., 'Advanced__T2_MediumVolume_Hours')
+            rate_band: Rate band for pricing (e.g., 'Standard_US')
+        
+        Returns:
+            Deliverable: Nested deliverable with components, tasks, and assignments
+        """
+        from models import (
+            Assignment, Task, Component, Deliverable,
+            generate_component_canonical_key, generate_task_canonical_key,
+            generate_assignment_canonical_key
+        )
+        
+        # Get deliverable metadata
+        deliv_row = self.deliverables[
+            self.deliverables["Deliverable_Code"].astype(str) == str(deliverable_code)
+        ] if self.deliverables is not None else pd.DataFrame()
+        
+        deliv_name = ""
+        department = ""
+        if not deliv_row.empty:
+            deliv_name = str(deliv_row["Deliverable"].iloc[0]) if "Deliverable" in deliv_row.columns else ""
+            department = str(deliv_row["Category"].iloc[0]) if "Category" in deliv_row.columns else ""
+        
+        # Create deliverable with canonical ID
+        deliverable = Deliverable(
+            code=deliverable_code,
+            name=deliv_name or deliverable_code,
+            department=department,
+            selected=True
+        )
+        deliverable.id = deliverable.canonical_key()  # Use canonical key for stable ID
+        
+        # Filter all_rows for this deliverable and included task groups
+        if self.all_rows is None or self.all_rows.empty:
+            return deliverable
+            
+        sub = self.all_rows[
+            (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
+            (self.all_rows["task_group"].isin(included_task_groups))
+        ].copy()
+        
+        if sub.empty:
+            return deliverable
+        
+        # Get rate lookup
+        rate_lookup = {}
+        if self.role_rate_card is not None and not self.role_rate_card.empty:
+            rate_col = rate_band if rate_band in self.role_rate_card.columns else "Standard_US"
+            for _, row in self.role_rate_card.iterrows():
+                role = str(row.get("Resource_Title", "")).strip()
+                seniority = str(row.get("Seniority", "Mid")).strip()
+                rate = float(row.get(rate_col, 0) or 0)
+                rate_lookup[f"{role}|{seniority}"] = rate
+        
+        # Get unique components (sorted for deterministic order)
+        components_list = sorted(set(sub["Component"].astype(str).str.strip().tolist()))
+        components_list = [c for c in components_list if c and c != "nan"]
+        if not components_list:
+            components_list = ["General"]
+        
+        for comp_name in components_list:
+            # Use canonical key for component ID
+            comp_canonical_key = generate_component_canonical_key(deliverable_code, comp_name)
+            component = Component(
+                id=comp_canonical_key,
+                name=comp_name,
+                description=None
+            )
+            
+            # Get task groups for this component
+            if comp_name == "General" or comp_name == "":
+                comp_sub = sub[(sub["Component"].astype(str).str.strip() == "") | 
+                               (sub["Component"].astype(str).str.strip() == "General") |
+                               (sub["Component"].isna())]
+            else:
+                comp_sub = sub[sub["Component"].astype(str).str.strip() == comp_name]
+            
+            if comp_sub.empty:
+                continue
+            
+            # Group by task_group (sorted for deterministic order)
+            task_groups = sorted(set(comp_sub["task_group"].astype(str).tolist()))
+            
+            for tg in task_groups:
+                tg_sub = comp_sub[comp_sub["task_group"].astype(str) == tg]
+                if tg_sub.empty:
+                    continue
+                
+                # Get task label
+                task_label = tg
+                if "Task_Label" in tg_sub.columns:
+                    labels = tg_sub["Task_Label"].dropna().astype(str).str.strip()
+                    labels = labels[labels != ""]
+                    if not labels.empty:
+                        task_label = labels.iloc[0]
+                
+                # Get task code and row_id
+                task_code = ""
+                row_id = ""
+                if hasattr(self, "_col_task_code") and self._col_task_code and self._col_task_code in tg_sub.columns:
+                    v = tg_sub[self._col_task_code].dropna().astype(str).str.strip()
+                    if not v.empty:
+                        task_code = v.value_counts().idxmax()
+                if hasattr(self, "_col_row_id") and self._col_row_id and self._col_row_id in tg_sub.columns:
+                    v = tg_sub[self._col_row_id].dropna().astype(str).str.strip()
+                    if not v.empty:
+                        row_id = sorted(v.tolist(), key=lambda x: (len(x), x))[0]
+                
+                # Use canonical key for task ID
+                task_canonical_key = generate_task_canonical_key(deliverable_code, comp_name, task_label)
+                task = Task(
+                    id=task_canonical_key,
+                    label=task_label,
+                    description=None,
+                    task_code=task_code if task_code else None,
+                    row_id=row_id if row_id else None,
+                    task_group=tg
+                )
+                
+                # Build assignments from role/seniority groups (sorted for deterministic order)
+                if scenario_col in tg_sub.columns:
+                    role_groups = tg_sub.groupby(["Resource_Title", "Seniority"], as_index=False)[scenario_col].sum()
+                    role_groups = role_groups.sort_values(["Resource_Title", "Seniority"])
+                    
+                    for _, role_row in role_groups.iterrows():
+                        role = str(role_row["Resource_Title"]).strip()
+                        seniority = str(role_row["Seniority"]).strip() or "Mid"
+                        hours = float(role_row[scenario_col]) if pd.notna(role_row[scenario_col]) else 0.0
+                        
+                        if hours <= 0:
+                            continue
+                        
+                        # Look up rate
+                        rate = rate_lookup.get(f"{role}|{seniority}", 0.0)
+                        if rate == 0:
+                            rate = rate_lookup.get(f"{role}|Mid", DEFAULT_BILLABLE_RATE_USD)
+                        
+                        # Use canonical key for assignment ID
+                        asgn_canonical_key = generate_assignment_canonical_key(
+                            deliverable_code, comp_name, task_label, role, seniority
+                        )
+                        assignment = Assignment(
+                            id=asgn_canonical_key,
+                            role=role,
+                            seniority=seniority,
+                            allocation_hours=hours,
+                            rate=rate
+                        )
+                        task.assignments.append(assignment)
+                
+                # Recalculate task totals from assignments (bottom-up rollup)
+                task.recalculate_from_assignments()
+                
+                if task.assignments:  # Only add tasks with assignments
+                    component.tasks.append(task)
+            
+            # Recalculate component totals from tasks (bottom-up rollup)
+            component.recalculate_from_tasks()
+            
+            if component.tasks:  # Only add components with tasks
+                deliverable.components.append(component)
+        
+        # Recalculate deliverable totals from components (bottom-up rollup)
+        deliverable.recalculate_from_components()
+        
+        return deliverable
+
+    def build_nested_scenario(
+        self, deliverable_codes: List[str], complexity: str, tier: str,
+        rate_band: str = "Standard_US", category_map: Optional[Dict[str, str]] = None,
+        scenario_name: Optional[str] = None
+    ) -> NestedScenario:
+        """
+        Build a complete nested scenario from multiple deliverables.
+        
+        Uses canonical key generation and bottom-up rollup calculations.
+        
+        Args:
+            deliverable_codes: List of deliverable codes to include
+            complexity: Complexity level (e.g., 'Advanced')
+            tier: Volume tier (e.g., 'T2_MediumVolume')
+            rate_band: Rate band for pricing
+            category_map: Optional mapping of code → category for bundle resolution
+            scenario_name: Optional scenario name (defaults to complexity/tier)
+        
+        Returns:
+            NestedScenario: Complete nested scenario with all deliverables
+        """
+        from models import NestedScenario
+        import datetime as dt
+        
+        scenario_col = self.scenario_hours_col(complexity, tier)
+        
+        # Generate stable scenario ID from parameters
+        scenario_id = f"scenario_{complexity}_{tier}_{hashlib.md5('|'.join(sorted(deliverable_codes)).encode()).hexdigest()[:8]}"
+        
+        scenario = NestedScenario(
+            id=scenario_id,
+            name=scenario_name or f"{complexity} / {tier}",
+            complexity=complexity,
+            tier=tier,
+            rate_band=rate_band,
+            created_at=dt.datetime.now(),
+            updated_at=dt.datetime.now()
+        )
+        
+        for code in sorted(deliverable_codes):  # Sort for deterministic order
+            # Determine included task groups
+            category = ""
+            if category_map and code in category_map:
+                category = category_map[code]
+            else:
+                # Look up category from deliverables
+                if self.deliverables is not None:
+                    row = self.deliverables[self.deliverables["Deliverable_Code"].astype(str) == str(code)]
+                    if not row.empty:
+                        category = str(row["Category"].iloc[0])
+            
+            # Get task groups based on bundle mode
+            included = []
+            try:
+                # Try bundle mode first
+                included = self.included_task_groups(category, f"{complexity}_{tier}")
+            except Exception:
+                pass
+            
+            if not included:
+                # Fallback: all task groups for this deliverable (sorted)
+                sub = self.all_rows[self.all_rows["Deliverable_Code"].astype(str) == str(code)]
+                included = sorted(set(sub["task_group"].dropna().astype(str).tolist())) if not sub.empty else []
+            
+            # Build nested deliverable
+            deliverable = self.build_nested_deliverable(code, included, scenario_col, rate_band)
+            scenario.deliverables.append(deliverable)
+        
+        # Perform full bottom-up recalculation to ensure totals are consistent
+        scenario.recalculate_all()
+        
+        return scenario
+
 DB = AgencyDB()
 
 # ---------- Helper: extract text from uploaded file bytes ----------
@@ -8081,6 +8336,81 @@ async def api_scenario_nested(session_id: str):
         }
     except Exception as e:
         print(f"[NESTED] Error getting nested scenario: {e}")
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500
+        )
+
+# Build nested scenario from AgencyDB (Phase 2 - Task 4)
+class BuildNestedPayload(BaseModel):
+    """Payload for building nested scenario from AgencyDB"""
+    deliverable_codes: List[str]
+    complexity: str = "Advanced"
+    tier: str = "T2_MediumVolume"
+    rate_band: str = "Standard_US"
+    session_id: Optional[str] = None
+
+@app.post("/api/scenario/build-nested")
+async def api_build_nested_scenario(payload: BuildNestedPayload):
+    """
+    Build a nested scenario from AgencyDB data.
+    
+    This endpoint creates a hierarchical scenario structure:
+    Deliverable → Component → Task → Assignment
+    
+    The result includes proper bottom-up rollup calculations and
+    canonical keys for all entities.
+    """
+    try:
+        if not DB.loaded:
+            DB.load()
+        
+        # Build category map for bundle resolution
+        category_map = {}
+        if DB.deliverables is not None:
+            for code in payload.deliverable_codes:
+                row = DB.deliverables[DB.deliverables["Deliverable_Code"].astype(str) == str(code)]
+                if not row.empty:
+                    category_map[code] = str(row["Category"].iloc[0])
+        
+        # Build nested scenario
+        nested = DB.build_nested_scenario(
+            deliverable_codes=payload.deliverable_codes,
+            complexity=payload.complexity,
+            tier=payload.tier,
+            rate_band=payload.rate_band,
+            category_map=category_map
+        )
+        
+        # Generate session_id if not provided
+        session_id = payload.session_id or f"nested_{int(time.time())}"
+        
+        # Store in SCENARIO_STORE in nested format
+        from models import nested_scenario_to_legacy
+        legacy_format = nested_scenario_to_legacy(nested)
+        legacy_format["_is_nested_source"] = True  # Mark as built from nested
+        legacy_format["nested_scenario"] = nested.model_dump()  # Store nested too
+        
+        set_baseline_and_scenario(session_id, legacy_format)
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "scenario": nested.model_dump(),
+            "totals": {
+                "hours": nested.total_hours,
+                "price": nested.total_price,
+                "effective_rate": nested.effective_rate,
+                "deliverable_count": len(nested.deliverables),
+                "component_count": sum(len(d.components) for d in nested.deliverables),
+                "task_count": sum(len(c.tasks) for d in nested.deliverables for c in d.components),
+                "assignment_count": sum(len(t.assignments) for d in nested.deliverables for c in d.components for t in c.tasks)
+            }
+        }
+    except Exception as e:
+        import traceback
+        print(f"[BUILD_NESTED] Error: {e}")
+        traceback.print_exc()
         return JSONResponse(
             {"success": False, "error": str(e)},
             status_code=500
