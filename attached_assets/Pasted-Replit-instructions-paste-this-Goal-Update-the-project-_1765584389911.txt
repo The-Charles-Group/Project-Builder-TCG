@@ -1,0 +1,144 @@
+Replit instructions (paste this)
+
+Goal: Update the project builder to use a consistent hierarchy and assignment system across all deliverables (not a single department). The system must output and edit data as:
+
+Deliverables → Components → Tasks
+…and each Task must support Assignments (role(s), assignee(s), hours, rate, dates, dependencies).
+
+1) Data model + JSON contract (required)
+
+Refactor the “scenario”/project data to a nested structure:
+
+Deliverable
+
+id, code, name, department, description
+
+components[]
+
+Component
+
+id, name, description, optional default_role(s)
+
+tasks[]
+
+Task
+
+id, label/name
+
+hours (planned)
+
+rate (or role-derived rate)
+
+assignments[] (see below)
+
+dependencies[] (task ids)
+
+start_date, end_date (optional)
+
+Assignment
+
+role (string)
+
+assignee (string or null)
+
+allocation_hours
+
+notes (optional)
+
+Rules
+
+Assignments live at the task level (not deliverable level).
+
+Support multi-role/multi-assignee tasks (you already have a feature flag concept for this; ensure it applies globally, not per-department). 
+
+12.12.25 app gantt timeline sho…
+
+Totals must roll up: task hours → component hours → deliverable hours → scenario totals.
+
+2) Assignment breakdown (required UI + API)
+
+Add a first-class “Assignment Breakdown” view and API fields:
+
+At minimum, return per-task assignments and an aggregated rollup:
+
+by deliverable
+
+by component
+
+by role
+
+by assignee (if present)
+
+3) Backend changes (required)
+
+Update the scenario store to persist and return the nested structure.
+
+Ensure item identity is stable: implement a canonical key for task matching (deliverable_code + component + task label) and use it consistently in patch/save/update flows. 
+
+12.12.25 app gantt timeline sho…
+
+Recompute totals from nested tasks (don’t “rescale” user edits; preserve provided values and recompute rollups deterministically). 
+
+12.12.25 app gantt timeline sho…
+
+4) Remove “work-wait-work” behavior (required)
+
+The UX must not block the user between steps. Replace “click → wait → click” with a single pipeline:
+
+Pipeline
+
+Upload / provide input
+
+Immediately create a job and return job_id
+
+Start analysis in background
+
+Stream progress updates to UI (preferred: SSE), and allow the UI to proceed while progress continues
+
+When completed, emit the scenario in the nested structure
+
+Implementation requirements
+
+Use existing job tracking patterns and stores instead of adding new ad-hoc waiting behavior.
+
+Add a single unified job lifecycle with clear stages (queued, processing, completed, failed) and % progress.
+
+Frontend should subscribe to live updates (SSE) and render partial progress; polling is acceptable only as fallback. (You already have job/status patterns and stores; wire them into streaming.) 
+
+12.12.25 app gantt timeline sho…
+
+5) Acceptance criteria (must pass)
+
+Any deliverable from any department outputs as deliverable → component → task (no flat “items” list in UI).
+
+Each task includes assignments[] and edits persist across refresh (scenario persistence already exists—keep it working). 
+
+12.12.25 app gantt timeline sho…
+
+The UI never forces the user to “wait” to continue basic navigation; progress is displayed continuously.
+
+Exports (timeline/pricing) must use the nested structure and rollups.
+
+6) Implementation checklist (do this in order)
+
+Add/adjust schema + types for Deliverable/Component/Task/Assignment
+
+Update scenario creation to generate nested output
+
+Update recompute totals to roll up from tasks
+
+Update PATCH/edits to target task IDs/keys
+
+Add endpoints:
+
+GET /api/scenario/:session_id returns nested scenario
+
+PATCH /api/scenario/:session_id/task/:task_id updates task + assignments
+
+GET /api/scenario/:session_id/assignments returns rollups
+
+Implement SSE progress stream endpoint and frontend subscriber
+
+Replace step-gating UI with pipelined progress + partial rendering
+
+Regression test: multi-assignment tasks + dependencies + export
