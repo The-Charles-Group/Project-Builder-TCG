@@ -1590,6 +1590,21 @@ def merge_scenario_from_sync(session_id: str):
     
     merged_scen["items"] = merged_items
     
+    # Phase 2: Preserve existing nested_scenario if present, only update if items changed
+    # Avoid re-converting wholesale to preserve bespoke nested edits (e.g., assignments)
+    if session_id in SCENARIO_STORE:
+        existing_nested = SCENARIO_STORE[session_id].get("nested_scenario")
+        if existing_nested:
+            # Preserve existing nested structure, just update metadata
+            merged_scen["nested_scenario"] = existing_nested
+        else:
+            # No existing nested, convert from legacy
+            try:
+                nested_scenario = convert_legacy_scenario_to_nested(merged_scen)
+                merged_scen["nested_scenario"] = nested_scenario.model_dump()
+            except Exception as e:
+                print(f"[SYNC] Warning: Could not convert to nested format: {e}")
+    
     update_working_scenario(session_id, merged_scen)
     print(f"[DEBUG] merge_scenario_from_sync merged: SCENARIO_STORE[{session_id}] keys:", list(SCENARIO_STORE[session_id].keys()))
 
@@ -8058,6 +8073,17 @@ def api_build(payload: BuildPayload):
         scenario_data = scenarios["A"].copy()
         scenario_data['session_id'] = payload.session_id
         scenario_data['last_saved'] = datetime.datetime.now().isoformat()
+        
+        # Phase 2: Convert to nested format BEFORE storing so both baseline and working copies get it
+        try:
+            nested_scenario = convert_legacy_scenario_to_nested(scenario_data)
+            scenario_data["nested_scenario"] = nested_scenario.model_dump()
+            scenario_data["_is_nested_source"] = False  # Built from legacy
+            print(f"[SCENARIO_STORE] Added nested format ({len(nested_scenario.deliverables)} deliverables, "
+                  f"{nested_scenario.total_hours:.0f}h, ${nested_scenario.total_price:.0f})")
+        except Exception as e:
+            print(f"[SCENARIO_STORE] Warning: Could not convert to nested format: {e}")
+        
         set_baseline_and_scenario(payload.session_id, scenario_data)
         print(f"[SCENARIO_STORE] Saved scenario to session {payload.session_id} with dual-entry format (enables Step 3 persistence)")
     
@@ -9320,6 +9346,14 @@ async def api_build_scenario(payload: BuildScenarioPayload):
         
         # Recompute totals
         scenario = _recompute_totals_auto(scenario)
+        
+        # Phase 2: Convert to nested format BEFORE storing so both baseline and working copies get it
+        try:
+            nested_scenario = convert_legacy_scenario_to_nested(scenario)
+            scenario["nested_scenario"] = nested_scenario.model_dump()
+            scenario["_is_nested_source"] = False
+        except Exception as e:
+            print(f"[SCENARIO_STORE] Warning: Could not convert to nested format: {e}")
         
         # Store in SCENARIO_STORE using new dual-entry architecture
         # Sets both baseline and working scenario
