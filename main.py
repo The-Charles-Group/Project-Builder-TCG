@@ -9398,6 +9398,210 @@ class ScenarioItemPatch(BaseModel):
     monthly_price: Optional[float] = None  # Optional monthly price
     months: Optional[int] = None  # Legacy field, mapped to retainer_months
 
+class AssignmentPatch(BaseModel):
+    """Payload for patching a single assignment in the nested structure."""
+    session_id: str
+    deliverable_code: str
+    component_name: str
+    task_label: str
+    assignment_id: Optional[str] = None  # If None, match by role+seniority
+    role: Optional[str] = None  # Required if assignment_id is None
+    seniority: Optional[str] = None  # For matching when assignment_id is None
+    allocation_hours: Optional[float] = None
+    rate: Optional[float] = None
+    assignee: Optional[str] = None
+    notes: Optional[str] = None
+
+def _find_assignment_in_nested(nested_scenario: dict, deliverable_code: str, component_name: str, 
+                                task_label: str, assignment_id: Optional[str] = None,
+                                role: Optional[str] = None, seniority: Optional[str] = None) -> Optional[Dict]:
+    """
+    Find an assignment in the nested scenario structure.
+    Returns the assignment dict if found, None otherwise.
+    """
+    deliverables = nested_scenario.get("deliverables", [])
+    for deliv in deliverables:
+        if deliv.get("code") != deliverable_code:
+            continue
+        for comp in deliv.get("components", []):
+            if comp.get("name") != component_name:
+                continue
+            for task in comp.get("tasks", []):
+                if task.get("label") != task_label:
+                    continue
+                for asgn in task.get("assignments", []):
+                    if assignment_id and asgn.get("id") == assignment_id:
+                        return asgn
+                    if role and asgn.get("role") == role:
+                        if seniority is None or asgn.get("seniority") == seniority:
+                            return asgn
+    return None
+
+def _sync_nested_to_flat_items(scenario: dict) -> None:
+    """
+    Sync nested_scenario totals back to flat items list.
+    Called after updating assignments to keep items in sync.
+    Recalculates totals from assignments before syncing.
+    """
+    nested = scenario.get("nested_scenario")
+    if not nested:
+        return
+    
+    items = scenario.get("items", [])
+    item_map = {}
+    for item in items:
+        code = item.get("deliverable_code") or item.get("Deliverable_Code")
+        if code:
+            item_map[code] = item
+    
+    deliverables = nested.get("deliverables", [])
+    for deliv in deliverables:
+        deliv_hours = 0.0
+        deliv_price = 0.0
+        
+        for comp in deliv.get("components", []):
+            comp_hours = 0.0
+            comp_price = 0.0
+            for task in comp.get("tasks", []):
+                task_hours = 0.0
+                task_price = 0.0
+                for asgn in task.get("assignments", []):
+                    asgn_hours = float(asgn.get("allocation_hours", 0) or 0)
+                    asgn_rate = float(asgn.get("rate", 0) or 0)
+                    task_hours += asgn_hours
+                    task_price += asgn_hours * asgn_rate
+                if not task.get("assignments"):
+                    task_hours = float(task.get("hours", 0) or 0)
+                    task_price = task_hours * float(task.get("rate", 0) or 0)
+                task["hours"] = round(task_hours, 2)
+                task["price"] = round(task_price, 2)
+                comp_hours += task_hours
+                comp_price += task_price
+            comp["hours"] = round(comp_hours, 2)
+            comp["price"] = round(comp_price, 2)
+            deliv_hours += comp_hours
+            deliv_price += comp_price
+        
+        deliv["hours"] = round(deliv_hours, 2)
+        deliv["total_hours"] = round(deliv_hours, 2)
+        deliv["price"] = round(deliv_price, 2)
+        if deliv_hours > 0:
+            deliv["rate"] = round(deliv_price / deliv_hours, 2)
+        
+        code = deliv.get("code")
+        if code in item_map:
+            item = item_map[code]
+            item["total_hours"] = deliv["hours"]
+            item["hours"] = deliv["hours"]
+            item["Planned_Hours"] = deliv["hours"]
+            item["price"] = deliv["price"]
+            item["Price_USD"] = deliv["price"]
+            item["price_usd"] = deliv["price"]
+            item["rate"] = deliv.get("rate", 0)
+            item["Rate_USD"] = deliv.get("rate", 0)
+
+def _find_component_in_nested(nested: dict, deliverable_code: str, 
+                               component_id: Optional[str] = None,
+                               component_name: Optional[str] = None) -> Optional[Dict]:
+    """Find a component by ID or name in the nested structure."""
+    for deliv in nested.get("deliverables", []):
+        if deliv.get("code") != deliverable_code:
+            continue
+        for comp in deliv.get("components", []):
+            if component_id and comp.get("id") == component_id:
+                return comp
+            if component_name and comp.get("name") == component_name:
+                return comp
+            if component_id and comp.get("name") == component_id:
+                return comp
+    return None
+
+def _sync_flat_items_to_nested(scenario: dict, deliverable_code: str, 
+                                component_name: Optional[str] = None) -> None:
+    """
+    Sync flat item changes to the nested_scenario structure.
+    Called after updating a flat item to propagate changes to nested.
+    Uses proportional scaling to distribute hours changes to assignments.
+    """
+    nested = scenario.get("nested_scenario")
+    if not nested:
+        return
+    
+    items = scenario.get("items", [])
+    item = None
+    for it in items:
+        code = it.get("deliverable_code") or it.get("Deliverable_Code")
+        if code == deliverable_code:
+            item = it
+            break
+    
+    if not item:
+        return
+    
+    new_hours = float(item.get("total_hours") or item.get("hours") or item.get("Planned_Hours") or 0)
+    new_rate = float(item.get("rate") or item.get("Rate_USD") or 0)
+    
+    for deliv in nested.get("deliverables", []):
+        if deliv.get("code") != deliverable_code:
+            continue
+        
+        if component_name:
+            comp = _find_component_in_nested(nested, deliverable_code, 
+                                              component_id=component_name, 
+                                              component_name=component_name)
+            if comp:
+                comp_hours_map = item.get("component_hours", {})
+                target_hours = float(comp_hours_map.get(component_name, 0) or comp_hours_map.get(comp.get("name"), 0))
+                if target_hours <= 0:
+                    target_hours = new_hours
+                
+                current_comp_hours = sum(
+                    sum(float(a.get("allocation_hours", 0) or 0) for a in t.get("assignments", []))
+                    or float(t.get("hours", 0) or 0)
+                    for t in comp.get("tasks", [])
+                )
+                
+                if current_comp_hours > 0:
+                    scale = target_hours / current_comp_hours
+                    for task in comp.get("tasks", []):
+                        for asgn in task.get("assignments", []):
+                            old_hours = float(asgn.get("allocation_hours", 0) or 0)
+                            asgn["allocation_hours"] = round(old_hours * scale, 2)
+                            if new_rate > 0:
+                                asgn["rate"] = new_rate
+                            asgn["user_edited"] = True
+                        if not task.get("assignments"):
+                            old_hours = float(task.get("hours", 0) or 0)
+                            task["hours"] = round(old_hours * scale, 2)
+                            if new_rate > 0:
+                                task["rate"] = new_rate
+        else:
+            current_total = 0.0
+            for comp in deliv.get("components", []):
+                for task in comp.get("tasks", []):
+                    if task.get("assignments"):
+                        current_total += sum(float(a.get("allocation_hours", 0) or 0) 
+                                            for a in task.get("assignments", []))
+                    else:
+                        current_total += float(task.get("hours", 0) or 0)
+            
+            if current_total > 0:
+                scale = new_hours / current_total
+                for comp in deliv.get("components", []):
+                    for task in comp.get("tasks", []):
+                        for asgn in task.get("assignments", []):
+                            old_hours = float(asgn.get("allocation_hours", 0) or 0)
+                            asgn["allocation_hours"] = round(old_hours * scale, 2)
+                            if new_rate > 0:
+                                asgn["rate"] = new_rate
+                            asgn["user_edited"] = True
+                        if not task.get("assignments"):
+                            old_hours = float(task.get("hours", 0) or 0)
+                            task["hours"] = round(old_hours * scale, 2)
+                            if new_rate > 0:
+                                task["rate"] = new_rate
+        break
+
 def _apply_item_updates(item: dict, payload: ScenarioItemPatch):
     """Apply updates to an item (deliverable or component), then call apply_cadence_to_item."""
     old_item = item.copy()  # Snapshot for change detection
@@ -9507,6 +9711,10 @@ async def api_patch_scenario_item(payload: ScenarioItemPatch):
             target = f"component {payload.component_id}" if payload.component_id else f"item {payload.deliverable_id}"
             raise HTTPException(404, f"{target} not found in scenario")
         
+        # Sync changes to nested_scenario if it exists
+        _sync_flat_items_to_nested(scenario, payload.deliverable_id, 
+                                    component_name=payload.component_id if payload.component_id else None)
+        
         # Update working scenario and recompute totals
         scenario = update_working_scenario(session_id, scenario)
         
@@ -9553,6 +9761,162 @@ async def api_patch_scenario_item(payload: ScenarioItemPatch):
         print(f"[SCENARIO_STORE] Error patching item: {e}")
         import traceback
         traceback.print_exc()
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500
+        )
+
+@app.patch("/api/pricing/assignment")
+async def api_patch_assignment(payload: AssignmentPatch):
+    """
+    Update a single assignment in the nested scenario structure.
+    This is the granular pricing update for task-level assignments.
+    
+    Required fields:
+    - session_id, deliverable_code, component_name, task_label
+    - Either assignment_id OR role (to identify the assignment)
+    
+    Optional updates:
+    - allocation_hours, rate, assignee, notes
+    
+    Returns updated scenario with recomputed totals at all levels.
+    """
+    try:
+        session_id = payload.session_id
+        
+        scenario = get_working_scenario(session_id)
+        if not scenario:
+            raise HTTPException(404, f"No scenario found for session {session_id}")
+        
+        nested = scenario.get("nested_scenario")
+        if not nested:
+            try:
+                nested_scenario = convert_legacy_scenario_to_nested(scenario)
+                scenario["nested_scenario"] = nested_scenario.model_dump()
+                nested = scenario["nested_scenario"]
+            except Exception as e:
+                raise HTTPException(400, f"Cannot update assignment: scenario not in nested format and conversion failed: {e}")
+        
+        assignment = _find_assignment_in_nested(
+            nested,
+            payload.deliverable_code,
+            payload.component_name,
+            payload.task_label,
+            payload.assignment_id,
+            payload.role,
+            payload.seniority
+        )
+        
+        if not assignment:
+            identifier = payload.assignment_id or f"role={payload.role}"
+            raise HTTPException(404, f"Assignment not found: {identifier} in {payload.deliverable_code}/{payload.component_name}/{payload.task_label}")
+        
+        if payload.allocation_hours is not None:
+            assignment["allocation_hours"] = round(payload.allocation_hours, 2)
+        if payload.rate is not None:
+            assignment["rate"] = round(payload.rate, 2)
+        if payload.assignee is not None:
+            assignment["assignee"] = payload.assignee
+        if payload.notes is not None:
+            assignment["notes"] = payload.notes
+        
+        assignment["user_edited"] = True
+        assignment["price"] = round(
+            assignment.get("allocation_hours", 0) * assignment.get("rate", 0), 2
+        )
+        
+        scenario = _recompute_totals_auto(scenario)
+        
+        _sync_nested_to_flat_items(scenario)
+        
+        scenario = update_working_scenario(session_id, scenario)
+        
+        print(f"[ASSIGNMENT PATCH] session={session_id} "
+              f"deliverable={payload.deliverable_code} "
+              f"component={payload.component_name} "
+              f"task={payload.task_label} "
+              f"hours={payload.allocation_hours} rate={payload.rate}")
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "assignment": assignment,
+            "totals": scenario.get("totals", {})
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ASSIGNMENT PATCH] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500
+        )
+
+@app.get("/api/pricing/assignments/{session_id}")
+async def api_get_assignments(session_id: str, deliverable_code: Optional[str] = None):
+    """
+    Get all assignments for a session, optionally filtered by deliverable.
+    Returns the nested structure with assignments at the task level.
+    """
+    try:
+        scenario = get_working_scenario(session_id)
+        if not scenario:
+            raise HTTPException(404, f"No scenario found for session {session_id}")
+        
+        nested = scenario.get("nested_scenario")
+        if not nested:
+            try:
+                nested_scenario = convert_legacy_scenario_to_nested(scenario)
+                scenario["nested_scenario"] = nested_scenario.model_dump()
+                nested = scenario["nested_scenario"]
+                update_working_scenario(session_id, scenario)
+            except Exception as e:
+                return {
+                    "success": True,
+                    "session_id": session_id,
+                    "assignments": [],
+                    "message": f"Scenario not in nested format: {e}"
+                }
+        
+        assignments = []
+        deliverables = nested.get("deliverables", [])
+        
+        for deliv in deliverables:
+            if deliverable_code and deliv.get("code") != deliverable_code:
+                continue
+            
+            for comp in deliv.get("components", []):
+                for task in comp.get("tasks", []):
+                    for asgn in task.get("assignments", []):
+                        assignments.append({
+                            "deliverable_code": deliv.get("code"),
+                            "deliverable_name": deliv.get("name"),
+                            "component_name": comp.get("name"),
+                            "task_label": task.get("label"),
+                            "assignment_id": asgn.get("id"),
+                            "role": asgn.get("role"),
+                            "seniority": asgn.get("seniority"),
+                            "assignee": asgn.get("assignee"),
+                            "allocation_hours": asgn.get("allocation_hours", 0),
+                            "rate": asgn.get("rate", 0),
+                            "price": asgn.get("price", 0),
+                            "user_edited": asgn.get("user_edited", False)
+                        })
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "assignments": assignments,
+            "total_count": len(assignments)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[GET ASSIGNMENTS] Error: {e}")
         return JSONResponse(
             {"success": False, "error": str(e)},
             status_code=500
