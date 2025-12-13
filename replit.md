@@ -13,64 +13,36 @@ Preferred communication style: Simple, everyday language.
 - Uses CSS custom properties for theming, including a dark mode.
 - 3-column layout (Deliverables | Components | Summary) with search functionality and enhanced summary panel.
 - Unified AI Planner UI with real-time progress bar, evidence-backed suggestions, and risk indicators.
-- "Select All/Deselect All" buttons and department grouping for deliverables.
 - UI toggle for optional inclusion of Start/End anchor milestones in XML exports.
 
 ### Technical Implementations
 - **Backend Framework**: FastAPI (Python).
 - **Data Processing**: Pandas DataFrames for Excel/CSV data; PDFPlumber and python-docx for RFP parsing.
 - **Core Logic**: RFP analysis, scenario building, pricing engine, timeline calculation, and Workfront-compatible export.
-- **SCENARIO_STORE Architecture**: Dual-entry session-based data store with immutable `baseline` and mutable `working` scenarios. Step 3 working scenario is the authoritative source for all pricing, timeline, and export operations.
+- **SCENARIO_STORE Architecture**: Dual-entry session-based data store with immutable `baseline` and mutable `working` scenarios, with PostgreSQL persistence.
 - **AI Planner v3**: Advanced reasoning-based AI layer (GPT-5 + AgencyDB) for granular task selection and holistic project flow analysis.
-- **GPT 5.1 Pro Enhancements**: Structured RFP summaries, curated L3 task selection, and consistent Gantt/XML export through a single source of truth (`compress_deliverable_timeline()`). Includes specific logic for first L2 deliverable SNET constraint and child-task dependency filtering.
+- **GPT 5.1 Pro Enhancements**: Structured RFP summaries, curated L3 task selection, and consistent Gantt/XML export. Includes specific logic for first L2 deliverable SNET constraint and child-task dependency filtering.
 - **Timeline Scheduler Kit**: AI-powered timeline optimization with Microsoft Project XML parsing, smart dependencies, and multi-format export.
 - **Workfront Integration**: Exports a 3-Level Workfront Hierarchy (Deliverable → Component → Task) with WBS codes and manual scheduling tags. Includes features for Gantt timeline date preservation and manual scheduling lock.
 - **PM-Brain Capacity Scheduling**: Capacity-based timeline scheduling with resource leveling and realistic dependencies.
 - **WBS-Based Dependencies + Multi-Assignment Export**: Feature-flagged system for dependency management and parallel role execution.
-- **Chronological Waterfall Export**: Production-ready XML export system creating simple, chronological Gantt timelines in Workfront, flattening the WBS hierarchy to prioritize chronological flow over department grouping. Includes an L5+ Edge Filtering System and Sibling Auto-Chaining System for dependency management.
+- **Chronological Waterfall Export**: Production-ready XML export system creating simple, chronological Gantt timelines in Workfront, flattening the WBS hierarchy to prioritize chronological flow over department grouping.
 - **Tight Waterfall Scheduling System**: Feature-flagged L2 deliverable scheduling that eliminates work-wait-work gaps in Workfront using specific ConstraintType and DurationFormat settings.
 - **Unified Pricing Data Flow**: Ensures the backend is the single source of truth for all pricing operations through a `syncScenarioToBackend()` and `rebuildPricingFromBackend()` pipeline.
-- **GPT 5.1 Pro Step 3 Pricing Edit Preservation**: Preserves user edits to hours/rates in Pricing Details when Build Scenario is clicked on Step 3, using `initPricingStep()`, `updateScenarioItem()`, and `collectScenarioFromUi()`.
-- **Component-to-Deliverable Cascade Pricing System**: Real-time cascade update system ensuring component edits flow through to deliverable totals, `SCENARIO_A`, and summary, using `updateDeliverableTotalFromComponents()` and `_lastKnownRate` caching.
+- **GPT 5.1 Pro Step 3 Pricing Edit Preservation**: Preserves user edits to hours/rates in Pricing Details.
+- **Component-to-Deliverable Cascade Pricing System**: Real-time cascade update system ensuring component edits flow through to deliverable totals and summary.
 - **Pre-Export Sync Pipeline**: Ensures DOM edits reach exports through a rewritten `collectScenarioFromUi()` that reads all hours/rates from DOM inputs, updates global scenarios, and syncs to the backend before export functions.
-- **Component-Level Hours Tracking System**: Granular component-level pricing overrides allowing users to edit individual component hours, which automatically cascade totals to parent deliverables. This includes specific functions for finding scenario items, applying pricing edits, and event delegation.
-- **Component-Hours Preservation Guards**: Three-part protection ensuring `component_hours` survive the collect→sync→export pipeline without DOM overwrites, including specific logic for using component hours sum and skipping DOM hydration.
-- **Deliverable Hours Component Sum Fix**: Both `updatePricingTable()` and `updatePricingDisplay()` now calculate deliverable hours from component sum on initial render, ensuring consistency across pricing tables.
-- **Component Hours Cascade Fix (Dec 2025)**: Fixed critical bug where editing one component (e.g., 33→34h) caused parent deliverable totals to collapse (306h→34h). Root cause: `collectScenarioFromUi` was recalculating parent hours from sparse `component_hours` map. Fix: Copy already-correct parent hours from `liveItem` (set by `updateDeliverableTotalFromComponents`) using nullish coalescing to preserve explicit zeros. Backend `get_hours_from_item` now prioritizes standard hour fields over component_hours sum.
-- **Pricing Summary Synchronization Fix (Dec 2025)**: Fixed critical bug where three displays showed different values (Pricing Details: 306h/$64,260, One-Time summary: 302h/$63,420, Grand Total: $63,000). Root cause: `recalculatePricingSummary()` read stale scenario totals while `updatePricingDisplay()` used original_price snapshot. Fix: `recalculatePricingSummary()` now calculates hours from component sum using the same priority chain (pricingData customHours → component_hours → component defaults) and derives price from hours × rate. `updatePricingDisplay()` Grand Total now uses current prices instead of frozen original_price.
-- **Unified Pricing Display Sync (Dec 2025)**: Added `refreshScenarioState()` function and enhanced `updateDeliverableTotalFromComponents()` to ensure all five pricing displays stay synchronized: Step 3 totals line, Step 3 table row (both display and input elements), Pricing Details header, One-Time summary, and Grand Total. Pre-export sync via `ensureScenarioSyncedBeforeExport()` calls `refreshScenarioState()` before XML/XLSX/CSV exports. Step 3 row lookup now handles missing deliverable_code with fallback to name matching.
-- **Component Rate Override Preservation (Dec 2025)**: Fixed bug where `refreshScenarioState()` and `recalculatePricingSummary()` overwrote component-level rate overrides with deliverable-level rates. Both functions now sum per-component `(hours × rate)` with priority chain: `pricingData.customRates` → `comp.rate` → `delivRate` fallback. This preserves user edits to individual component rates across all calculations and exports.
-- **Backend Authority Pricing Fix (Dec 2025)**: Fixed 300h→301h drift caused by frontend recalculating from fractional component hours. Root cause: `refreshScenarioState()`, `updatePricingDisplay()`, and `recalculatePricingSummary()` always recalculated totals from components, even when user hadn't made edits. Fix: Added `hasPricingEdits` check (pricingDetailsDirty OR customHours.size>0 OR customRates.size>0). When NO edits exist, all three functions now use backend's authoritative `item.total_hours` and `item.price` verbatim without fallback recalculation. This establishes backend SCENARIO_STORE as the single source of truth for pricing.
-- **GPT 5.1 Pro DOM Sweep System (Dec 2025)**: Comprehensive pre-sync DOM sweep ensures in-flight edits are captured before exports. Key changes:
-  1. Backend `_recompute_totals()` calculates parent hours from sum of `component_hours` values (no rescaling).
-  2. Backend `merge_scenario_from_sync()` includes `component_hours` in editable_fields for persistence.
-  3. Frontend `refreshScenarioState()` performs DOM sweep before sync: iterates all `tr[data-parent]` rows, reads component input values directly from DOM, updates `SCENARIO_A.items[].component_hours` map, and recalculates parent totals as exact sum.
-  4. Multi-strategy matching (exact, uppercase, sanitized) ensures deliverables with special characters are matched.
-  5. Frontend `window.SCENARIO_A` is the single source of truth for pricing; no dependency on ScenarioStore for sync.
-  6. `forceSync=true` on exports always syncs to backend regardless of dirty flags.
-- **PostgreSQL Database Persistence (Dec 2025)**: SCENARIO_STORE now persists to PostgreSQL, resolving in-memory data loss on server restarts. Uses `scenario_store` table with session_id, scenario_data JSONB, baseline_data JSONB, totals JSONB, and timestamps. Functions: `_save_scenario_to_db()`, `_load_scenario_from_db()`. Component hours edits survive server restarts through the sync→export pipeline.
-- **Nested Hierarchy Refactoring (Dec 2025)**: New schema models in `models.py` supporting Deliverable → Component → Task → Assignment hierarchy. Features:
-  1. Pydantic models: `Assignment`, `Task`, `Component`, `Deliverable`, `NestedScenario` with bottom-up rollup calculations.
-  2. Conversion utilities: `legacy_item_to_deliverable()`, `convert_legacy_scenario_to_nested()`, `nested_scenario_to_legacy()`, `is_nested_format()`, `ensure_nested_format()`.
-  3. Canonical key generation: `generate_task_canonical_key()`, `generate_component_canonical_key()`, `generate_assignment_canonical_key()`.
-  4. Assignment rollups: `AssignmentRollups` model with `calculate_rollups()` function for aggregations by deliverable, component, role, and assignee.
-  5. SCENARIO_STORE persistence updated to handle both legacy flat and nested formats with auto-detect via `_recompute_totals_auto()`.
-  6. New API endpoints: `/api/scenario/rollups/{session_id}` for assignment aggregations, `/api/scenario/nested/{session_id}` for nested format access.
-  7. **XML/MSPDI Export Nested Structure Support (Dec 2025)**: `build_wbs_with_pricing()` now traverses nested structure when available. Detects `components` array in scenario items, iterates over nested `tasks` and `assignments` instead of DB lookups. Preserves user edits from Step 3 UI through the export pipeline. Fallback to legacy DB-based path for backward compatibility.
-- **Workfront Duration Alignment (Dec 2025)**: Step 4 UI and MSP/XML exports now use business-day durations matching Workfront's "Duration" column:
-  1. `/api/timeline/save` populates `timeline_working_duration_days` (Mon-Fri business days) and `timeline_span_calendar_days` from compression_map.
-  2. `convert_excel_to_mspdi` accepts `compression_metadata` parameter and uses `duration_business_days` for L2 deliverable Duration in XML.
-  3. Step 4 Gantt popup and bar tooltips show "Working duration (Mon-Fri): X days" in green.
-  4. Fallback to calendar days when compression metadata is unavailable.
-  5. **Child Task Extension for Workfront Summary Duration**: Since Workfront recomputes summary task duration from children (ignoring XML Duration values), `convert_excel_to_mspdi()` now stretches child tasks to span the full deliverable window using `stretch_and_clamp_descendants()`. When applying compressed timeline dates to L2 deliverables, the affected UIDs are tracked in `compressed_timeline_uids`, and their descendants are stretched to fill the new_start → new_end window. This ensures Workfront's calculated duration matches the intended working-day duration (e.g., 64 days instead of ~25 days).
-  6. **Stretched UID Protection System (Dec 2025)**: Fixed critical bug where `rollup_summary()` was running after stretching and overwriting L3/L4 summary dates back to short spans. Root cause: L2 deliverables were protected by `preserved_dates`, but their stretched L3/L4 descendants were being recalculated from children. Fix: Added `stretched_uids` set that tracks ALL descendants touched by `stretch_and_clamp_descendants()`, and modified `rollup_summary()` to short-circuit for these UIDs (lines ~12967-12970 in main.py). This ensures stretched dates are preserved through the XML export pipeline.
+- **Component-Level Hours Tracking System**: Granular component-level pricing overrides allowing users to edit individual component hours, which automatically cascade totals to parent deliverables.
+- **Component Hours Preservation Guards**: Three-part protection ensuring `component_hours` survive the collect→sync→export pipeline without DOM overwrites.
+- **Nested Hierarchy Refactoring**: New schema models in `models.py` supporting Deliverable → Component → Task → Assignment hierarchy with bottom-up rollup calculations and canonical key generation. XML/MSPDI export supports this nested structure.
+- **Workfront Duration Alignment**: Step 4 UI and MSP/XML exports use business-day durations matching Workfront's "Duration" column. Child tasks are stretched to span the full deliverable window to ensure Workfront's calculated duration matches the intended working-day duration.
 - **Parallel Processing**: Utilizes OpenAI Vision API for parallel PDF image processing.
 - **Smart Image Analysis**: Two-tier image processing system with pre-filtering and deep analysis.
 - **Session Isolation System**: Complete data isolation between different RFPs using unique session IDs.
 - **CORS**: Configured to allow cross-origin requests.
 
 ### System Design Choices
-- **Data Storage Pattern**: Excel/CSV files as primary source for business rules and configuration, loaded into in-memory DataFrames.
+- **Data Storage Pattern**: Excel/CSV files as primary source for business rules and configuration, loaded into in-memory DataFrames and persisted to PostgreSQL.
 - **API Design**: RESTful endpoints for data loading, options retrieval, scenario generation, file uploads, and static file serving.
 - **Database Configuration**: Automatic switching based on environment (Replit's PostgreSQL for development, separate production database). Uses `Replit_App_DB_READABLE_FullRows_v3.xlsx` loaded into `app.state.db` at startup with pickle caching.
 
