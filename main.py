@@ -3543,7 +3543,7 @@ class AgencyDB:
                         
                         # Use canonical key for assignment ID
                         asgn_canonical_key = generate_assignment_canonical_key(
-                            deliverable_code, comp_name, task_label, role, seniority
+                            task_canonical_key, role, seniority
                         )
                         assignment = Assignment(
                             id=asgn_canonical_key,
