@@ -2590,12 +2590,23 @@ function updatePricingTable() {
           'background: linear-gradient(90deg, rgba(139,92,246,0.03), rgba(139,92,246,0.01));' :
           'background: rgba(255,255,255,0.005);';
         
+        const safeCompName = comp.name.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
+        const hasTasksToShow = compTasks.length > 0;
+        
         tableHTML += `
           <tr data-component="${compKey}" data-parent="${item.deliverable_code}" 
               class="component-row-${item.deliverable_code}"
               style="${compRowBg} display: none; border-bottom: 1px solid rgba(255,255,255,0.05);">
             <td style="padding: 10px 12px 10px 48px; color: var(--text); font-size: 0.9em;">
+              ${hasTasksToShow ? 
+                `<button onclick="toggleComponentExpand('${item.deliverable_code}', '${comp.name.replace(/'/g, "\\'")}')" 
+                        style="background: transparent; border: none; color: var(--accent2); cursor: pointer; padding: 0 6px 0 0; font-size: 0.8em; transition: transform 0.2s;"
+                        title="Expand/collapse tasks">
+                  <span id="expand-comp-${item.deliverable_code}-${safeCompName}" style="display: inline-block; transition: transform 0.2s;">▶</span>
+                </button>` : 
+                '<span style="padding: 0 14px 0 0;"></span>'}
               ↳ ${comp.name}
+              ${hasTasksToShow ? `<span style="font-size: 0.7em; color: var(--muted); margin-left: 6px;">(${compTasks.length} tasks)</span>` : ''}
             </td>
             <td style="padding: 8px; text-align: center;">
               ${compIsEditing ?
@@ -2653,7 +2664,7 @@ function updatePricingTable() {
               ${formatResourceDisplay(compResources)}
             </td>
             <td style="padding: 8px; font-size: 0.75em; color: var(--muted);">
-              ${formatTasksList(compTasks)}
+              ${hasTasksToShow ? `${compTasks.length} tasks` : '-'}
             </td>
             <td style="padding: 8px; text-align: center;">
               <button onclick="openDeliverableEditor('${item.deliverable_code}', '${item.deliverable.replace(/'/g, "\\'")}')"
@@ -2667,6 +2678,72 @@ function updatePricingTable() {
             </td>
           </tr>
         `;
+        
+        // Task rows (nested under component, initially hidden)
+        if (hasTasksToShow) {
+          compTasks.forEach((task, taskIdx) => {
+            const taskKey = `${compKey}::${task.label || task.name || 'Task_' + taskIdx}`;
+            const safeTaskKey = taskKey.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+            const taskHours = task.hours || 0;
+            const taskRate = task.rate || compRate;
+            const taskPrice = taskHours * taskRate;
+            const taskAssignments = task.assignments || [];
+            
+            tableHTML += `
+              <tr data-task="${taskKey.replace(/"/g, '&quot;')}" data-parent-comp="${compKey.replace(/"/g, '&quot;')}" data-parent="${item.deliverable_code}"
+                  class="task-row-comp-${item.deliverable_code}-${safeCompName} task-row-${item.deliverable_code}"
+                  style="background: rgba(255,255,255,0.01); display: none; border-bottom: 1px solid rgba(255,255,255,0.03);">
+                <td style="padding: 8px 12px 8px 80px; color: var(--muted); font-size: 0.8em;">
+                  ⤷ ${task.label || task.name || 'Task ' + (taskIdx + 1)}
+                </td>
+                <td style="padding: 6px; text-align: center;">
+                  <span style="font-size: 0.7em; color: var(--muted);">-</span>
+                </td>
+                <td style="padding: 6px; text-align: center;">
+                  <span style="font-size: 0.7em; color: var(--muted);">-</span>
+                </td>
+                <td style="padding: 6px; text-align: center;">
+                  <input type="number" value="${taskHours}" min="0" step="0.5"
+                         data-task-key="${taskKey.replace(/"/g, '&quot;')}"
+                         onchange="updateTaskHours('${safeTaskKey}', this.value)"
+                         style="width: 60px; padding: 4px; border: 1px solid rgba(16,185,129,0.3); 
+                                border-radius: 4px; background: rgba(16,185,129,0.05); 
+                                color: var(--text); text-align: center; font-size: 0.8em;" />
+                </td>
+                <td style="padding: 6px; text-align: center;">
+                  <div style="display: flex; align-items: center; gap: 2px; justify-content: center;">
+                    <span style="color: var(--muted); font-size: 0.75em;">$</span>
+                    <input type="number" value="${taskRate}" min="0" step="5"
+                           data-task-key="${taskKey.replace(/"/g, '&quot;')}"
+                           onchange="updateTaskRate('${safeTaskKey}', this.value)"
+                           style="width: 55px; padding: 4px; border: 1px solid rgba(16,185,129,0.3); 
+                                  border-radius: 4px; background: rgba(16,185,129,0.05); 
+                                  color: var(--text); text-align: center; font-size: 0.8em;" />
+                  </div>
+                </td>
+                <td style="padding: 6px; text-align: right; font-size: 0.8em; color: rgba(16,185,129,0.8);">
+                  $${taskPrice.toLocaleString()}
+                </td>
+                <td style="padding: 6px; text-align: right; font-size: 0.8em; color: rgba(16,185,129,0.9);">
+                  $${taskPrice.toLocaleString()}
+                </td>
+                <td colspan="2" style="padding: 6px; font-size: 0.7em; color: var(--muted);">
+                  ${formatAssignmentsList(taskAssignments)}
+                </td>
+                <td style="padding: 6px; text-align: center;">
+                  <button onclick="openTaskAssignmentEditor('${safeTaskKey}')"
+                          style="padding: 3px 6px; background: rgba(16,185,129,0.2); border: 1px solid rgba(16,185,129,0.4); 
+                                 border-radius: 4px; color: #10b981; cursor: pointer; font-size: 0.7em; transition: all 0.2s;"
+                          onmouseover="this.style.background='rgba(16,185,129,0.3)'"
+                          onmouseout="this.style.background='rgba(16,185,129,0.2)'"
+                          title="Edit task assignments">
+                    👤
+                  </button>
+                </td>
+              </tr>
+            `;
+          });
+        }
       });
     }
   });
@@ -4716,6 +4793,347 @@ function formatTasksList(tasks) {
     </div>`
   ).join('');
 }
+
+// Helper function to format task assignments list
+function formatAssignmentsList(assignments) {
+  if (!assignments || assignments.length === 0) {
+    return '<span style="color: var(--muted); font-style: italic;">No assignments</span>';
+  }
+  
+  return assignments.map(asgn => {
+    const role = asgn.role || 'Unassigned';
+    const hours = asgn.allocation_hours || asgn.hours || 0;
+    const assignee = asgn.assignee || '';
+    return `<span style="display: inline-block; padding: 2px 6px; margin: 1px; background: rgba(16,185,129,0.1); 
+                         border-radius: 4px; font-size: 0.75em;">
+      ${role}${assignee ? ` (${assignee})` : ''}: ${hours}h
+    </span>`;
+  }).join('');
+}
+
+// Update task hours - cascade to component and deliverable
+function updateTaskHours(taskKey, hours) {
+  const numHours = parseFloat(hours) || 0;
+  
+  // Store in a task-level custom hours map
+  if (!window.pricingData.taskCustomHours) {
+    window.pricingData.taskCustomHours = new Map();
+  }
+  window.pricingData.taskCustomHours.set(taskKey, numHours);
+  
+  // Parse taskKey: deliverable_code::comp_name::task_label
+  const parts = taskKey.split('::');
+  if (parts.length >= 2) {
+    const compKey = parts.slice(0, 2).join('::');
+    const deliverableCode = parts[0];
+    
+    // Recalculate component hours from all tasks
+    recalculateComponentFromTasks(compKey);
+    
+    // Recalculate deliverable from components
+    recalculateDeliverableFromComponents(deliverableCode);
+    
+    updateRowTotals(deliverableCode);
+    updatePricingSummary();
+  }
+  
+  pricingDetailsDirty = true;
+  console.log('[PRICING] Task hours updated:', taskKey, numHours);
+}
+
+// Update task rate
+function updateTaskRate(taskKey, rate) {
+  const numRate = parseFloat(rate) || 210;
+  
+  if (!window.pricingData.taskCustomRates) {
+    window.pricingData.taskCustomRates = new Map();
+  }
+  window.pricingData.taskCustomRates.set(taskKey, numRate);
+  
+  // Parse taskKey and cascade updates
+  const parts = taskKey.split('::');
+  if (parts.length >= 2) {
+    const compKey = parts.slice(0, 2).join('::');
+    const deliverableCode = parts[0];
+    
+    recalculateComponentFromTasks(compKey);
+    recalculateDeliverableFromComponents(deliverableCode);
+    
+    updateRowTotals(deliverableCode);
+    updatePricingSummary();
+  }
+  
+  pricingDetailsDirty = true;
+  console.log('[PRICING] Task rate updated:', taskKey, numRate);
+}
+
+// Recalculate component hours from its tasks
+function recalculateComponentFromTasks(compKey) {
+  const scenarios = getScenarioState();
+  if (!scenarios || !scenarios.A) return;
+  
+  const parts = compKey.split('::');
+  if (parts.length < 2) return;
+  
+  const deliverableCode = parts[0];
+  const compName = parts[1];
+  
+  const item = scenarios.A.items.find(i => i.deliverable_code === deliverableCode);
+  if (!item || !item.components) return;
+  
+  const comp = item.components.find(c => c.name === compName);
+  if (!comp || !comp.tasks) return;
+  
+  let totalHours = 0;
+  let totalPrice = 0;
+  
+  comp.tasks.forEach((task, idx) => {
+    const taskKey = `${compKey}::${task.label || task.name || 'Task_' + idx}`;
+    const taskHours = window.pricingData.taskCustomHours?.get(taskKey) ?? task.hours ?? 0;
+    const taskRate = window.pricingData.taskCustomRates?.get(taskKey) ?? task.rate ?? comp.rate ?? 210;
+    
+    totalHours += taskHours;
+    totalPrice += taskHours * taskRate;
+  });
+  
+  // Update component in pricingData
+  window.pricingData.customHours.set(compKey, totalHours);
+  if (totalHours > 0) {
+    window.pricingData.customRates.set(compKey, totalPrice / totalHours);
+  }
+}
+
+// Recalculate deliverable from components
+function recalculateDeliverableFromComponents(deliverableCode) {
+  const scenarios = getScenarioState();
+  if (!scenarios || !scenarios.A) return;
+  
+  const item = scenarios.A.items.find(i => i.deliverable_code === deliverableCode);
+  if (!item || !item.components) return;
+  
+  let totalHours = 0;
+  let totalPrice = 0;
+  
+  item.components.forEach(comp => {
+    const compKey = `${deliverableCode}::${comp.name}`;
+    const compHours = window.pricingData.customHours.get(compKey) ?? comp.hours ?? 0;
+    const compRate = window.pricingData.customRates.get(compKey) ?? comp.rate ?? 210;
+    
+    totalHours += compHours;
+    totalPrice += compHours * compRate;
+  });
+  
+  // Update deliverable in pricingData
+  window.pricingData.customHours.set(deliverableCode, totalHours);
+  if (totalHours > 0) {
+    window.pricingData.customRates.set(deliverableCode, totalPrice / totalHours);
+  }
+}
+
+// Open task assignment editor modal
+function openTaskAssignmentEditor(taskKey) {
+  const parts = taskKey.split('::');
+  if (parts.length < 3) {
+    showToast('Invalid task key', 'error');
+    return;
+  }
+  
+  const deliverableCode = parts[0];
+  const compName = parts[1];
+  const taskLabel = parts[2];
+  
+  const scenarios = getScenarioState();
+  if (!scenarios || !scenarios.A) {
+    showToast('No scenario loaded', 'error');
+    return;
+  }
+  
+  const item = scenarios.A.items.find(i => i.deliverable_code === deliverableCode);
+  if (!item) {
+    showToast('Deliverable not found', 'error');
+    return;
+  }
+  
+  const comp = item.components?.find(c => c.name === compName);
+  if (!comp) {
+    showToast('Component not found', 'error');
+    return;
+  }
+  
+  const task = comp.tasks?.find(t => (t.label || t.name) === taskLabel);
+  if (!task) {
+    showToast('Task not found', 'error');
+    return;
+  }
+  
+  // Create modal for editing assignments
+  const existingModal = document.getElementById('task-assignment-modal');
+  if (existingModal) existingModal.remove();
+  
+  const assignments = task.assignments || [];
+  
+  const modal = document.createElement('div');
+  modal.id = 'task-assignment-modal';
+  modal.style.cssText = `
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.7); z-index: 10002;
+    display: flex; align-items: center; justify-content: center;
+  `;
+  
+  const assignmentsHTML = assignments.length > 0 
+    ? assignments.map((asgn, idx) => `
+        <div class="assignment-row" data-idx="${idx}" style="display: flex; gap: 10px; margin-bottom: 10px; align-items: center;">
+          <input type="text" value="${asgn.role || ''}" placeholder="Role" 
+                 style="flex: 2; padding: 8px; border: 1px solid rgba(106,163,255,0.3); border-radius: 6px; 
+                        background: rgba(0,0,0,0.2); color: var(--text);" />
+          <select style="flex: 1; padding: 8px; border: 1px solid rgba(106,163,255,0.3); border-radius: 6px; 
+                         background: rgba(0,0,0,0.2); color: var(--text);">
+            <option value="Junior" ${asgn.seniority === 'Junior' ? 'selected' : ''}>Junior</option>
+            <option value="Mid" ${asgn.seniority === 'Mid' ? 'selected' : ''}>Mid</option>
+            <option value="Senior" ${asgn.seniority === 'Senior' ? 'selected' : ''}>Senior</option>
+            <option value="Director" ${asgn.seniority === 'Director' ? 'selected' : ''}>Director</option>
+          </select>
+          <input type="number" value="${asgn.allocation_hours || asgn.hours || 0}" placeholder="Hours" min="0" step="0.5"
+                 style="width: 70px; padding: 8px; border: 1px solid rgba(106,163,255,0.3); border-radius: 6px; 
+                        background: rgba(0,0,0,0.2); color: var(--text); text-align: center;" />
+          <input type="number" value="${asgn.rate || 210}" placeholder="Rate" min="0" step="5"
+                 style="width: 80px; padding: 8px; border: 1px solid rgba(106,163,255,0.3); border-radius: 6px; 
+                        background: rgba(0,0,0,0.2); color: var(--text); text-align: center;" />
+          <button onclick="this.parentElement.remove()" 
+                  style="padding: 6px 10px; background: rgba(220,38,38,0.2); border: 1px solid rgba(220,38,38,0.4); 
+                         border-radius: 4px; color: #dc2626; cursor: pointer;">✕</button>
+        </div>
+      `).join('')
+    : '<div style="color: var(--muted); font-style: italic; padding: 10px;">No assignments yet</div>';
+  
+  modal.innerHTML = `
+    <div style="background: var(--card); padding: 24px; border-radius: 12px; max-width: 700px; width: 90%; 
+                box-shadow: 0 8px 24px rgba(0,0,0,0.4); max-height: 80vh; overflow-y: auto;">
+      <h3 style="margin: 0 0 16px 0; color: var(--accent);">👤 Edit Task Assignments</h3>
+      <div style="margin-bottom: 12px; color: var(--muted); font-size: 0.9em;">
+        <strong>Task:</strong> ${taskLabel}<br>
+        <strong>Component:</strong> ${compName}<br>
+        <strong>Deliverable:</strong> ${item.deliverable || deliverableCode}
+      </div>
+      
+      <div id="assignments-container" style="margin-bottom: 16px;">
+        ${assignmentsHTML}
+      </div>
+      
+      <button id="btn-add-assignment" 
+              style="padding: 8px 16px; background: rgba(16,185,129,0.2); border: 1px solid rgba(16,185,129,0.4); 
+                     border-radius: 6px; color: #10b981; cursor: pointer; margin-bottom: 20px;">
+        + Add Assignment
+      </button>
+      
+      <div style="display: flex; gap: 12px; justify-content: flex-end;">
+        <button id="btn-cancel-assignments" 
+                style="padding: 10px 20px; background: rgba(100,100,100,0.3); border: none; 
+                       border-radius: 6px; color: var(--text); cursor: pointer;">
+          Cancel
+        </button>
+        <button id="btn-save-assignments" 
+                style="padding: 10px 20px; background: var(--accent); border: none; 
+                       border-radius: 6px; color: #08121e; font-weight: 600; cursor: pointer;">
+          Save Assignments
+        </button>
+      </div>
+    </div>
+  `;
+  
+  document.body.appendChild(modal);
+  
+  // Add event listeners
+  document.getElementById('btn-cancel-assignments').onclick = () => modal.remove();
+  
+  document.getElementById('btn-add-assignment').onclick = () => {
+    const container = document.getElementById('assignments-container');
+    const newRow = document.createElement('div');
+    newRow.className = 'assignment-row';
+    newRow.style.cssText = 'display: flex; gap: 10px; margin-bottom: 10px; align-items: center;';
+    newRow.innerHTML = `
+      <input type="text" value="" placeholder="Role" 
+             style="flex: 2; padding: 8px; border: 1px solid rgba(106,163,255,0.3); border-radius: 6px; 
+                    background: rgba(0,0,0,0.2); color: var(--text);" />
+      <select style="flex: 1; padding: 8px; border: 1px solid rgba(106,163,255,0.3); border-radius: 6px; 
+                     background: rgba(0,0,0,0.2); color: var(--text);">
+        <option value="Junior">Junior</option>
+        <option value="Mid" selected>Mid</option>
+        <option value="Senior">Senior</option>
+        <option value="Director">Director</option>
+      </select>
+      <input type="number" value="0" placeholder="Hours" min="0" step="0.5"
+             style="width: 70px; padding: 8px; border: 1px solid rgba(106,163,255,0.3); border-radius: 6px; 
+                    background: rgba(0,0,0,0.2); color: var(--text); text-align: center;" />
+      <input type="number" value="210" placeholder="Rate" min="0" step="5"
+             style="width: 80px; padding: 8px; border: 1px solid rgba(106,163,255,0.3); border-radius: 6px; 
+                    background: rgba(0,0,0,0.2); color: var(--text); text-align: center;" />
+      <button onclick="this.parentElement.remove()" 
+              style="padding: 6px 10px; background: rgba(220,38,38,0.2); border: 1px solid rgba(220,38,38,0.4); 
+                     border-radius: 4px; color: #dc2626; cursor: pointer;">✕</button>
+    `;
+    container.appendChild(newRow);
+  };
+  
+  document.getElementById('btn-save-assignments').onclick = () => {
+    const rows = document.querySelectorAll('#assignments-container .assignment-row');
+    const newAssignments = [];
+    
+    rows.forEach(row => {
+      const inputs = row.querySelectorAll('input, select');
+      if (inputs.length >= 4) {
+        const role = inputs[0].value.trim();
+        const seniority = inputs[1].value;
+        const hours = parseFloat(inputs[2].value) || 0;
+        const rate = parseFloat(inputs[3].value) || 210;
+        
+        if (role && hours > 0) {
+          newAssignments.push({
+            role,
+            seniority,
+            allocation_hours: hours,
+            rate,
+            price: hours * rate
+          });
+        }
+      }
+    });
+    
+    // Update task assignments in scenario
+    task.assignments = newAssignments;
+    task.hours = newAssignments.reduce((sum, a) => sum + (a.allocation_hours || 0), 0);
+    if (task.hours > 0) {
+      task.rate = newAssignments.reduce((sum, a) => sum + a.price, 0) / task.hours;
+    }
+    task.user_edited = true;
+    
+    // Update task custom hours
+    const taskHours = task.hours;
+    if (!window.pricingData.taskCustomHours) {
+      window.pricingData.taskCustomHours = new Map();
+    }
+    window.pricingData.taskCustomHours.set(taskKey, taskHours);
+    
+    // Cascade updates
+    const compKey = `${deliverableCode}::${compName}`;
+    recalculateComponentFromTasks(compKey);
+    recalculateDeliverableFromComponents(deliverableCode);
+    
+    // Update UI
+    updatePricingTable();
+    updatePricingSummary();
+    pricingDetailsDirty = true;
+    
+    modal.remove();
+    showToast('Assignments saved successfully', 'success');
+  };
+}
+
+// Export functions to window for onclick handlers
+window.updateTaskHours = updateTaskHours;
+window.updateTaskRate = updateTaskRate;
+window.openTaskAssignmentEditor = openTaskAssignmentEditor;
+window.toggleComponentExpand = toggleComponentExpand;
 
 // Functions for inline editing
 function enableRowEdit(code) {
