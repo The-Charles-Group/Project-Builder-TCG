@@ -4239,7 +4239,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     scenario = _inflate_components_if_missing(scenario)
     
     # PATCH B: Recompute totals to ensure Step 3 edits are consistent before WBS build
-    scenario = _recompute_totals(scenario)
+    scenario = _recompute_totals_auto(scenario)
     
     rows = []
     pricing_mode = (scenario.get("pricing_mode") or "Flat_Blended").strip()
@@ -5133,7 +5133,7 @@ def _get_scenarios(session_id: Optional[str] = None) -> dict:
             print(f"[GET_SCENARIOS] First item component_hours: {first_item.get('component_hours', 'NOT SET')}")
         
         # Call _recompute_totals to ensure all pricing fields are in sync before export
-        scenario = _recompute_totals(scenario)
+        scenario = _recompute_totals_auto(scenario)
         
         print(f"[GET_SCENARIOS] Scenario keys: {list(scenario.keys())}")
         print(f"[GET_SCENARIOS] Has timeline_tasks: {'timeline_tasks' in scenario}")
@@ -9182,7 +9182,7 @@ async def api_build_scenario(payload: BuildScenarioPayload):
                 # Return current working scenario (preserve Step 3 edits)
                 print(f"[SCENARIO_STORE] ✅ Returning working scenario for {session_id} (preserving Step 3 edits)")
                 scenario = get_working_scenario(session_id)
-                scenario = _recompute_totals(scenario)
+                scenario = _recompute_totals_auto(scenario)
                 update_working_scenario(session_id, scenario)
                 return {
                     "success": True,
@@ -9319,7 +9319,7 @@ async def api_build_scenario(payload: BuildScenarioPayload):
         }
         
         # Recompute totals
-        scenario = _recompute_totals(scenario)
+        scenario = _recompute_totals_auto(scenario)
         
         # Store in SCENARIO_STORE using new dual-entry architecture
         # Sets both baseline and working scenario
@@ -9545,7 +9545,7 @@ async def api_rebuild_breakdown(payload: RebuildBreakdownPayload):
             raise HTTPException(404, f"No scenario found for session {session_id}")
         
         # Recompute totals
-        scenario = _recompute_totals(scenario)
+        scenario = _recompute_totals_auto(scenario)
         
         # Update working scenario with recomputed totals
         update_working_scenario(session_id, scenario)
@@ -9792,7 +9792,7 @@ async def api_optimize_scenario(payload: OptimizeScenarioPayload):
                             i["Planned_Hours"] = round(i.get("Planned_Hours", 0) * ratio, 2)
         
         # Recompute totals and update working scenario (preserves dual-entry store)
-        scenario = _recompute_totals(scenario)
+        scenario = _recompute_totals_auto(scenario)
         update_working_scenario(session_id, scenario)
         
         return {
@@ -9952,7 +9952,7 @@ async def api_update_timeline_task(payload: UpdateTaskPayload):
             print(f"[GANTT EDIT] Saved End_Date={payload.end_date} for WBS_ID={payload.wbs_id}")
         
         # Recompute totals and update working scenario (preserves dual-entry store)
-        scenario = _recompute_totals(scenario)
+        scenario = _recompute_totals_auto(scenario)
         update_working_scenario(session_id, scenario)
         
         # Update timeline if it exists
@@ -10018,7 +10018,7 @@ async def api_update_timeline_tasks_batch(payload: UpdateTasksBatchPayload):
                     break
         
         # Recompute totals and update working scenario (preserves dual-entry store)
-        scenario = _recompute_totals(scenario)
+        scenario = _recompute_totals_auto(scenario)
         update_working_scenario(session_id, scenario)
         
         return {
@@ -10318,7 +10318,7 @@ def api_post_scenarios(payload: dict, request: Request):
             if baseline:
                 print(f"[/api/scenarios] 🔄 Reset requested - restoring from baseline for {session_id}")
                 new_scenario = deepcopy(baseline)
-                new_scenario = _recompute_totals(new_scenario)
+                new_scenario = _recompute_totals_auto(new_scenario)
                 update_working_scenario(session_id, new_scenario)
                 print(f"[DEBUG] SCENARIO_STORE[{session_id}] keys after reset:", list(SCENARIO_STORE[session_id].keys()))
                 return {
@@ -10359,7 +10359,7 @@ def api_post_scenarios(payload: dict, request: Request):
         # If a working copy exists (but wasn't in SCENARIO_STORE path above), reuse it
         if scenario and scenario.get("items"):
             print(f"[/api/scenarios] ✅ Returning working scenario for {session_id} (preserving Step 3 edits)")
-            scenario = _recompute_totals(scenario)
+            scenario = _recompute_totals_auto(scenario)
             if session_id:
                 update_working_scenario(session_id, scenario)
             totals = scenario.get("totals", {})
@@ -10936,7 +10936,7 @@ def api_export_xml_post(payload: Union[ExportXMLPayload, dict]):
                 
                 # If no payload scenario, use store scenario directly
                 if not payload_scenario:
-                    scenario = _recompute_totals(store_scenario)
+                    scenario = _recompute_totals_auto(store_scenario)
                     update_working_scenario(session_id, scenario)
                     print(f"[XML EXPORT] 📦 Using working scenario for session {session_id} (preserves Step 3 edits)")
                     
@@ -16875,7 +16875,7 @@ async def sync_scenario(payload: ScenarioSyncPayload):
         
         # Recompute totals in SCENARIO_STORE for consistent pricing
         if session_id in SCENARIO_STORE and SCENARIO_STORE[session_id].get("scenario"):
-            SCENARIO_STORE[session_id]["scenario"] = _recompute_totals(SCENARIO_STORE[session_id]["scenario"])
+            SCENARIO_STORE[session_id]["scenario"] = _recompute_totals_auto(SCENARIO_STORE[session_id]["scenario"])
         
         # Also update global _CURRENT_SCENARIOS if exists
         if scenario_data and scenario_data.get("items"):
