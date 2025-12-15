@@ -37,6 +37,15 @@ import hashlib
 import time
 from functools import lru_cache
 import pickle
+from scheduling_calendar import (
+    working_minutes_between as shared_working_minutes_between,
+    working_days_between as shared_working_days_between,
+    add_working_minutes, add_working_days,
+    is_business_day, get_next_business_day,
+    format_mspdi_duration, format_mspdi_work,
+    get_mspdi_dates, schedule_sequential_tasks,
+    MINUTES_PER_DAY, HOURS_PER_DAY
+)
 
 # ============================================================
 # FEATURE FLAGS
@@ -6393,26 +6402,29 @@ class WeightedScoresRequest(BaseModel):
 DELIVERABLE_BUFFER_WORK_DAYS = int(os.environ.get("DELIVERABLE_BUFFER_WORK_DAYS", "0"))
 
 def add_business_days(start_date: datetime.date, business_days: int) -> datetime.date:
-    """Add business days (Mon-Fri) to a start date, skipping weekends."""
-    current = start_date
-    days_added = 0
-    while days_added < business_days:
-        current += datetime.timedelta(days=1)
-        if current.weekday() < 5:
-            days_added += 1
-    return current
+    """Add business days (Mon-Fri) to a start date, skipping weekends.
+    
+    Uses shared scheduling_calendar module for single source of truth.
+    """
+    # Convert date to datetime at 9:00 AM for the shared function
+    start_dt = datetime.datetime.combine(start_date, datetime.time(9, 0))
+    result_dt = add_working_days(start_dt, float(business_days))
+    return result_dt.date()
 
 def calculate_business_days_between(start_date: datetime.date, end_date: datetime.date) -> int:
-    """Calculate the number of business days between two dates (inclusive of end)."""
+    """Calculate the number of business days between two dates (inclusive of end).
+    
+    Uses shared scheduling_calendar module for single source of truth.
+    """
     if end_date < start_date:
         return 0
-    days = 0
-    current = start_date
-    while current <= end_date:
-        if current.weekday() < 5:
-            days += 1
-        current += datetime.timedelta(days=1)
-    return max(1, days)
+    # Convert dates to datetimes (full day span) for the shared function
+    start_dt = datetime.datetime.combine(start_date, datetime.time(9, 0))
+    end_dt = datetime.datetime.combine(end_date, datetime.time(17, 0))
+    # Get working minutes and convert to days
+    working_minutes = shared_working_minutes_between(start_dt, end_dt)
+    working_days = working_minutes / MINUTES_PER_DAY
+    return max(1, int(round(working_days)))
 
 def compress_deliverable_timeline(
     tasks: List[Dict[str, Any]],
@@ -13726,47 +13738,14 @@ def convert_excel_to_mspdi(
         else:
             project_start = datetime.datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
 
-        # Business calendar helpers (using same Mon-Fri, 8-12 & 13-17 schedule)
+        # 3-LEVEL HIERARCHY: Use shared scheduling module (single source of truth)
+        # See scheduling_calendar.py for Mon-Fri, 9-5 business calendar math
         from datetime import time, date
         
-        BUS_BLOCKS = [(time(8,0), time(12,0)), (time(13,0), time(17,0))]
-
-        def is_business_day(d):
-            return d.weekday() < 5  # Mon–Fri
-
-        def business_minutes_in_range(day: date, start_t: time, end_t: time) -> int:
-            # minutes worked on a single day between start_t and end_t
-            if not is_business_day(day): 
-                return 0
-            start_t = max(start_t, BUS_BLOCKS[0][0])
-            end_t   = min(end_t,   BUS_BLOCKS[-1][1])
-            if end_t <= start_t:
-                return 0
-            total = 0
-            for a,b in BUS_BLOCKS:
-                s = max(start_t, a)
-                e = min(end_t,   b)
-                if e > s:
-                    total += int((datetime.datetime.combine(day,e) - datetime.datetime.combine(day,s)).total_seconds() // 60)
-            return total
-
+        # Alias shared module function for local use
         def business_minutes_between(start_dt: datetime.datetime, end_dt: datetime.datetime) -> int:
-            if end_dt <= start_dt:
-                return 0
-            cur = start_dt.date()
-            end = end_dt.date()
-            minutes = 0
-            # first day (partial)
-            minutes += business_minutes_in_range(cur, start_dt.time(), time(17,0))
-            # middle full days
-            d = cur + datetime.timedelta(days=1)
-            while d < end:
-                if is_business_day(d):
-                    minutes += 480  # 8h
-                d += datetime.timedelta(days=1)
-            # last day (partial)
-            minutes += business_minutes_in_range(end, time(8,0), end_dt.time())
-            return minutes
+            """Wrapper around shared module's working_minutes_between for backwards compatibility."""
+            return shared_working_minutes_between(start_dt, end_dt)
 
         # Calculate task schedules
         uid_to_sched = {}
