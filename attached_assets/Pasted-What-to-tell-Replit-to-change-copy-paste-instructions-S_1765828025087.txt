@@ -1,0 +1,132 @@
+What to tell Replit to change (copy/paste instructions)
+
+Send this as the directive. It’s concrete and implementable:
+
+A) Use ONE source of truth for dates (UI Gantt = Export)
+
+Instruction:
+
+In export_ms_project_xml (or wherever XML export happens), do NOT recompute task dates. Use the exact same schedule object used to render Step 4 Gantt / weekly+monthly PDFs.
+Create a schedule_by_wbs (or schedule_by_uid) dict once, and both the UI and XML must read from it.
+
+Why: If UI says 1/5–1/15 but XML says 1/5–1/28, you will never win.
+
+⸻
+
+B) Fix duration semantics: STOP subtracting 1 business day
+
+Instruction:
+
+Search for any code like:
+	•	duration_days = max(1, biz_days_inclusive - 1)
+	•	or any - 1 applied to business day counts for Duration
+Remove that.
+If Start/Finish are inclusive day bounds, DurationDays must also be inclusive:
+duration_days = calculate_business_days_between(start.date(), finish.date())
+duration_minutes = duration_days * 480
+
+This is the most common “why Workfront is off by 1 day everywhere” bug.
+
+⸻
+
+C) Make the hierarchy real: deliverables/components must be Summary tasks
+
+Instruction:
+
+Build a parent_wbs_set from the WBS tree:
+	•	any WBS that is a prefix of another WBS is a parent
+Then in XML:
+	•	if wbs in parent_wbs_set → Summary=1, Work=PT0M
+	•	else (leaf task) → Summary=0, Work=PT{planned_minutes}M
+
+Do not rely on “only UID 1 is summary”. That will inflate hours and break rollups.
+
+⸻
+
+D) Prevent “hours inflation”: only LEAF tasks carry work
+
+Instruction:
+
+Parent rows (deliverables/components) must have Work=PT0M.
+Leaf tasks must have Work equal to the actual planned effort.
+Workfront will roll up parent hours automatically.
+
+If you assign hours to parents and children, Workfront totals explode and durations drift.
+
+⸻
+
+E) Ensure rollups match app: enforce parent boundaries through children
+
+Instruction:
+
+For each Deliverable (and Component), guarantee:
+	•	at least one child starts exactly on the parent start date
+	•	at least one child ends exactly on the parent end date
+If necessary, “pin” the first and last leaf tasks under that parent to those boundary dates.
+
+Why: Workfront computes parent Start/Finish from children. If no child ends on the deliverable end date, Workfront will not show that end date.
+
+⸻
+
+F) Assignments + assignment breakdown (keep it; don’t strip it)
+
+Instruction:
+
+Remove/disable any “Workfront cleanup” block that deletes <Resources> or <Assignments>.
+Workfront will import assignments if Resources+Assignments are valid.
+
+Implementation rules:
+	•	<Resources>: one resource per role (Designer, Strategist, etc) with stable UIDs
+	•	<Assignments>: one assignment per (task, role) with:
+	•	TaskUID
+	•	ResourceUID
+	•	Work = PT{role_minutes}M
+	•	Units = role_minutes / task_duration_minutes (clamp to 1.0 if needed)
+
+That gives you the Assignments column + Assignment Breakdown column behavior you want.
+
+⸻
+
+G) Remove resources from task titles (keep them only in assignments)
+
+Instruction:
+
+Stop naming tasks like client_review - Account Manager,Copywriter,Strategist.
+Name the task client_review (or Brand Narrative – client_review for uniqueness).
+Roles must exist only as Assignments.
+
+This keeps the task list readable while preserving breakdown.
+
+⸻
+
+H) Remove “work-wait-work” behavior (where it actually comes from)
+
+This happens when you chain too much sequentially.
+
+Instruction:
+
+Only create predecessor links at the level you truly want sequential:
+	•	Deliverable → Deliverable (if you want waterfall)
+	•	Component → Component (inside deliverable, if needed)
+Avoid leaf-task-to-leaf-task chaining unless it’s truly required.
+Especially: do NOT chain tasks that represent parallel role work.
+
+If the task is multi-assigned (Designer + Strategist), they can overlap. Don’t force FS links.
+
+⸻
+
+5) How to debug the “Brand Positioning Strategy becomes 1/28” case in 60 seconds
+
+Tell Replit to do this:
+	1.	Import XML.
+	2.	Expand Brand Positioning Strategy in Workfront.
+	3.	Sort by Due On descending.
+	4.	Find the child task that ends on 1/28.
+	5.	In the XML, locate that task’s UID and inspect:
+	•	Start / Finish
+	•	Duration
+	•	Work
+	•	Predecessors
+	6.	Fix the generator so that task ends by 1/15 (or whatever app says) or it will ALWAYS push the deliverable.
+
+This is the fastest way to identify the single offender that’s dragging the parent.

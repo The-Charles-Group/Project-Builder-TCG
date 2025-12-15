@@ -14514,14 +14514,9 @@ def convert_excel_to_mspdi(
                     # Create new UID for this assignment (unique, traceable)
                     new_uid = base_uid * 1000 + idx + 1
                     
-                    # Create expanded task name with role/seniority
-                    if role and role.lower() != "unassigned":
-                        if seniority and seniority.lower() != "mid":
-                            new_name = f"{task_name} - {role} ({seniority})"
-                        else:
-                            new_name = f"{task_name} - {role}"
-                    else:
-                        new_name = task_name
+                    # FIX: Keep task name clean - roles must exist ONLY in Assignments
+                    # Don't add role names to task titles (per Workfront best practices)
+                    new_name = task_name
                     
                     # Copy row with new UID and name
                     expanded_row = {
@@ -15068,11 +15063,12 @@ def convert_excel_to_mspdi(
             
             SubElement(task, "OutlineLevel").text = str(outline_level)
             
-            # GPT-5 PRO FIX: Make deliverable/summary mutually exclusive to prevent duplicate ConstraintType tags
-            # WATERFALL FIX: Deliverables are now OutlineLevel=2 (direct children of Project Summary)
+            # FIX: Any task that has children is a Summary task - use summary_set (parents only)
+            # This ensures Workfront properly rolls up hours from children
             is_deliverable = outline_level == 2 and not is_root
-            is_summary = (r["WBS"] in summary_set or is_root) and not is_deliverable
-            SubElement(task, "Summary").text = "1" if is_summary else "0"
+            # Summary=1 for ANY parent task (including deliverables with children), not just non-deliverables
+            is_parent_task = r["WBS"] in summary_set or is_root
+            SubElement(task, "Summary").text = "1" if is_parent_task else "0"
             
             # GPT-5 PRO FIX: Conditional DurationFormat based on manual scheduling
             # TIGHT_WATERFALL: Deliverables use DurationFormat=7 (auto-scheduled) when enabled
@@ -15082,7 +15078,7 @@ def convert_excel_to_mspdi(
                 # TIGHT WATERFALL: Deliverables are auto-scheduled with ASAP constraint
                 is_manually_scheduled = False
             else:
-                is_manually_scheduled = is_deliverable or (is_summary and not is_root)
+                is_manually_scheduled = is_deliverable or (is_parent_task and not is_root)
             SubElement(task, "DurationFormat").text = "53" if is_manually_scheduled else "7"
             
             # GPT-5 PRO FIX: Reordered branches to prevent overlap (root → deliverable → summary → leaf)
@@ -15123,9 +15119,10 @@ def convert_excel_to_mspdi(
                         finish_str = uid_to_sched[r["UID"]]["Finish"]
                         start_dt = datetime.datetime.fromisoformat(start_str.replace('Z', ''))
                         finish_dt = datetime.datetime.fromisoformat(finish_str.replace('Z', ''))
-                        # Business days inclusive, then -1 for exclusive duration semantics
+                        # FIX: Business days INCLUSIVE - DO NOT subtract 1
+                        # If Start/Finish are inclusive day bounds, Duration must also be inclusive
                         biz_days_inclusive = calculate_business_days_between(start_dt.date(), finish_dt.date())
-                        duration_days = max(1, biz_days_inclusive - 1)
+                        duration_days = max(1, biz_days_inclusive)
                         print(f"[XML EXPORT] 📏 Deliverable Duration (business days fallback): {name_txt[:40]} = {duration_days} days")
                     except Exception as e:
                         duration_days = 1
@@ -15175,21 +15172,20 @@ def convert_excel_to_mspdi(
                     
                     print(f"[WORKFRONT] 🔒 Applied FNLT constraint to deliverable: {name_txt} (WBS {r['WBS']}, Finish={constraint_date})")
             
-            elif is_summary and not is_root:
-                # NON-ROOT SUMMARY TASKS (OutlineLevel 3+): Calculate actual duration from Start/Finish
+            elif is_parent_task and not is_root and not is_deliverable:
+                # NON-DELIVERABLE PARENT TASKS (Components, OutlineLevel 3+): Calculate actual duration from Start/Finish
                 SubElement(task, "Work").text = "PT0M"
                 
                 # Calculate Duration using BUSINESS DAYS (Mon-Fri) to match Workfront
-                # The helper is inclusive of both endpoints, but duration is start-to-finish (exclusive)
-                # So we subtract 1 to get the correct span (e.g., 65 inclusive → 64 duration)
+                # FIX: Business days INCLUSIVE - DO NOT subtract 1
+                # If Start/Finish are inclusive day bounds, Duration must also be inclusive
                 try:
                     start_str = uid_to_sched[r["UID"]]["Start"]
                     finish_str = uid_to_sched[r["UID"]]["Finish"]
                     start_dt = datetime.datetime.fromisoformat(start_str.replace('Z', ''))
                     finish_dt = datetime.datetime.fromisoformat(finish_str.replace('Z', ''))
-                    # Business days inclusive count, then -1 for exclusive duration semantics
                     biz_days_inclusive = calculate_business_days_between(start_dt.date(), finish_dt.date())
-                    duration_days = max(1, biz_days_inclusive - 1)
+                    duration_days = max(1, biz_days_inclusive)
                     duration_minutes = duration_days * 480  # 8-hour workday
                     SubElement(task, "Duration").text = f"PT{duration_minutes}M"
                 except Exception:
@@ -15254,8 +15250,10 @@ def convert_excel_to_mspdi(
                         
                         start_dt = to_datetime(start_val)
                         finish_dt = to_datetime(finish_val)
+                        # FIX: Business days INCLUSIVE - DO NOT subtract 1
+                        # If Start/Finish are inclusive day bounds, Duration must also be inclusive
                         biz_days_inclusive = calculate_business_days_between(start_dt.date(), finish_dt.date())
-                        duration_days = max(1, biz_days_inclusive - 1) if biz_days_inclusive > 1 else max(0, biz_days_inclusive)
+                        duration_days = max(1, biz_days_inclusive)
                         dur_minutes = duration_days * 480 if duration_days > 0 else 0
                     except Exception:
                         # Fallback: use work-based calculation
@@ -15815,12 +15813,23 @@ def convert_excel_to_mspdi(
             outline_level = wbs.count(".") + 1
             wbs_to_outline[wbs] = outline_level
         
-        # Filter edges: keep L3+ edges only if same root deliverable
+        # Filter edges: 
+        # 1. Keep L3+ edges only if same root deliverable
+        # 2. FIX: Skip L4+ → L4+ edges (leaf-to-leaf) to prevent work-wait-work behavior
+        #    Parallel role work should NOT be chained sequentially
         filtered_edges = set()
         cross_deliv_dropped = 0
+        leaf_to_leaf_dropped = 0
         for pred_wbs, succ_wbs in all_edges:
             pred_level = wbs_to_outline.get(pred_wbs, 0)
             succ_level = wbs_to_outline.get(succ_wbs, 0)
+            
+            # FIX: Skip leaf-to-leaf (L4+ → L4+) dependencies entirely
+            # These cause "work-wait-work" behavior in Workfront
+            # Only Deliverable→Deliverable and Component→Component sequencing should happen
+            if pred_level >= 4 and succ_level >= 4:
+                leaf_to_leaf_dropped += 1
+                continue
             
             # Only filter if BOTH tasks are L3+ (OutlineLevel >= 3)
             if pred_level >= 3 and succ_level >= 3:
@@ -15834,6 +15843,9 @@ def convert_excel_to_mspdi(
             
             # Keep the edge
             filtered_edges.add((pred_wbs, succ_wbs))
+        
+        if leaf_to_leaf_dropped > 0:
+            print(f"[TASK 7] 🔒 Filtered {leaf_to_leaf_dropped} leaf-to-leaf (L4+→L4+) edges (preventing work-wait-work)")
         
         if cross_deliv_dropped > 0:
             print(f"[TASK 3] 🔒 Filtered {cross_deliv_dropped} cross-deliverable L3+ edges (keeping internal dependencies only)")
