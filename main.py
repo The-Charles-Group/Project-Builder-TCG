@@ -16007,23 +16007,17 @@ def convert_excel_to_mspdi(
             wbs_to_outline[wbs] = outline_level
         
         # Filter edges: 
-        # 1. Keep L3+ edges only if same root deliverable
-        # 2. FIX: Skip L4+ → L4+ edges (leaf-to-leaf) to prevent work-wait-work behavior
-        #    Parallel role work should NOT be chained sequentially
+        # Only filter CROSS-DELIVERABLE L3+ edges (keep dependencies internal to their deliverable)
+        # NOTE: L4+ → L4+ (leaf-to-leaf) edges are now ALLOWED for intra-component waterfall
+        # The effort-based scheduler creates FS dependencies between phases:
+        # general → internal_review → client_review → qa
         filtered_edges = set()
         cross_deliv_dropped = 0
-        leaf_to_leaf_dropped = 0
         for pred_wbs, succ_wbs in all_edges:
             pred_level = wbs_to_outline.get(pred_wbs, 0)
             succ_level = wbs_to_outline.get(succ_wbs, 0)
             
-            # NOTE: Leaf-to-leaf (L4+ → L4+) dependencies are now ALLOWED for intra-component waterfall
-            # The effort-based scheduler creates FS dependencies between phases:
-            # general → internal_review → client_review → qa
-            # These dependencies are critical for clean waterfall behavior in Workfront
-            # The old filter was causing ASAP chaos - now we let the scheduler's FS deps through
-            
-            # Only filter if BOTH tasks are L3+ (OutlineLevel >= 3)
+            # Only filter CROSS-deliverable L3+ edges - intra-component L4 deps are allowed
             if pred_level >= 3 and succ_level >= 3:
                 pred_deliv = get_root_deliverable_wbs(pred_wbs)
                 succ_deliv = get_root_deliverable_wbs(succ_wbs)
@@ -16033,11 +16027,8 @@ def convert_excel_to_mspdi(
                     cross_deliv_dropped += 1
                     continue
             
-            # Keep the edge
+            # Keep the edge (including L4+ intra-component edges for waterfall)
             filtered_edges.add((pred_wbs, succ_wbs))
-        
-        if leaf_to_leaf_dropped > 0:
-            print(f"[TASK 7] 🔒 Filtered {leaf_to_leaf_dropped} leaf-to-leaf (L4+→L4+) edges (preventing work-wait-work)")
         
         if cross_deliv_dropped > 0:
             print(f"[TASK 3] 🔒 Filtered {cross_deliv_dropped} cross-deliverable L3+ edges (keeping internal dependencies only)")
@@ -16104,6 +16095,36 @@ def convert_excel_to_mspdi(
             # Phase order for waterfall
             PHASE_ORDER = ["general", "internal_review", "client_review", "qa"]
             
+            # Build lookup from task name to phase_window from compressed_timeline
+            # This uses the scheduler's actual phase assignments instead of name heuristics
+            task_phase_lookup: Dict[str, str] = {}  # task_name_lower -> phase
+            if compressed_timeline:
+                timeline_tasks = compressed_timeline.get("tasks", [])
+                for task in timeline_tasks:
+                    task_name = task.get("name", "") or task.get("Name", "")
+                    phase = task.get("phase_window", "")  # Set by effort scheduler
+                    if task_name and phase:
+                        task_phase_lookup[task_name.lower().strip()] = phase
+                print(f"[EFFORT WATERFALL] Loaded {len(task_phase_lookup)} phase_window assignments from scheduler")
+            
+            def classify_task_phase(task_name: str) -> str:
+                """Classify task using scheduler metadata first, then name heuristics."""
+                # First, try scheduler metadata
+                name_key = task_name.lower().strip()
+                if name_key in task_phase_lookup:
+                    return task_phase_lookup[name_key]
+                
+                # Fallback to name heuristics
+                name_lower = task_name.lower()
+                if 'qa' in name_lower or 'quality' in name_lower:
+                    return 'qa'
+                elif 'client' in name_lower:
+                    return 'client_review'
+                elif 'internal' in name_lower:
+                    return 'internal_review'
+                else:
+                    return 'general'
+            
             # Group L4 tasks by component key (deliverable|component)
             component_phase_tasks: Dict[str, Dict[str, List]] = {}  # comp_key -> phase -> [task_elems]
             
@@ -16134,16 +16155,8 @@ def convert_excel_to_mspdi(
                     continue
                 comp_key = ".".join(wbs_parts[:3])  # e.g., "1.2.3"
                 
-                # Classify task into phase
-                name_lower = task_name.lower()
-                if 'qa' in name_lower or 'quality' in name_lower:
-                    phase = 'qa'
-                elif 'client' in name_lower:
-                    phase = 'client_review'
-                elif 'internal' in name_lower:
-                    phase = 'internal_review'
-                else:
-                    phase = 'general'
+                # Classify task into phase using scheduler metadata or name heuristics
+                phase = classify_task_phase(task_name)
                 
                 if comp_key not in component_phase_tasks:
                     component_phase_tasks[comp_key] = {p: [] for p in PHASE_ORDER}
