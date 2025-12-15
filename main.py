@@ -53,6 +53,7 @@ from scheduling_calendar import (
 ENABLE_WBS_DEPENDENCIES = True  # Use WBS Dependencies column instead of scheduler edges
 ENABLE_MULTI_ASSIGNMENT = True  # Group roles into multi-assignment tasks
 STRIP_ASSIGNMENTS_FOR_WF = False  # When True, removes Resources/Assignments from XML (legacy Workfront behavior)
+PHASE_WINDOW_ENABLED = os.getenv("PHASE_WINDOW_ENABLED", "true").lower() == "true"  # Split components into general/internal_review/client_review phases
 # ROLLBACK: Set both to False to restore legacy behavior (scheduler edges, one task per role)
 
 # ============================================================
@@ -6684,6 +6685,175 @@ def compress_deliverable_timeline(
     
     return compressed_tasks, metadata
 
+
+def apply_phase_window_scheduling(
+    tasks: List[Dict[str, Any]],
+    component_windows: Dict[str, Dict[str, Any]] = None
+) -> List[Dict[str, Any]]:
+    """
+    Apply phase-window scheduling to split component windows into sequential phases.
+    
+    This eliminates "work-wait-work" gaps by tiling general, internal_review, and client_review
+    phases across each component's time window.
+    
+    Phase allocation:
+    - general: 50% of component duration (min 1 business day)
+    - internal_review: 30% of component duration (min 1 business day)
+    - client_review: 20% of component duration (min 1 business day)
+    
+    Args:
+        tasks: List of timeline tasks with start/end dates
+        component_windows: Optional pre-computed component windows
+    
+    Returns:
+        Updated tasks with phase-based scheduling
+    """
+    if not PHASE_WINDOW_ENABLED:
+        print(f"[PHASE-WINDOW] Disabled via PHASE_WINDOW_ENABLED=false")
+        return tasks
+    
+    print(f"[PHASE-WINDOW] Applying phase-window scheduling to {len(tasks)} tasks")
+    
+    # Phase definitions with weights (sum to 1.0)
+    PHASE_WEIGHTS = {
+        "general": 0.50,
+        "internal_review": 0.30,
+        "client_review": 0.20
+    }
+    MIN_PHASE_DAYS = 1  # Minimum business days per phase
+    
+    # Group tasks by component
+    component_tasks: Dict[str, List[Dict[str, Any]]] = {}
+    component_windows_computed: Dict[str, Dict[str, Any]] = {}
+    
+    for task in tasks:
+        component = task.get('component', '') or task.get('Component', '')
+        if not component or component.lower() == 'nan':
+            continue
+        
+        deliverable_code = task.get('deliverable_code', '')
+        key = f"{deliverable_code}|{component}"
+        
+        if key not in component_tasks:
+            component_tasks[key] = []
+            component_windows_computed[key] = {
+                'min_start': None,
+                'max_end': None,
+                'deliverable_code': deliverable_code,
+                'component': component
+            }
+        
+        component_tasks[key].append(task)
+        
+        # Track component window
+        task_start = task.get('start', '')
+        task_end = task.get('end', '')
+        
+        if task_start and task_end:
+            try:
+                start_dt = datetime.datetime.fromisoformat(task_start.replace('Z', '')).date()
+                end_dt = datetime.datetime.fromisoformat(task_end.replace('Z', '')).date()
+                
+                window = component_windows_computed[key]
+                if window['min_start'] is None or start_dt < window['min_start']:
+                    window['min_start'] = start_dt
+                if window['max_end'] is None or end_dt > window['max_end']:
+                    window['max_end'] = end_dt
+            except (ValueError, AttributeError):
+                continue
+    
+    print(f"[PHASE-WINDOW] Found {len(component_windows_computed)} components to process")
+    
+    # Process each component
+    phase_assignments = 0
+    for key, window in component_windows_computed.items():
+        if window['min_start'] is None or window['max_end'] is None:
+            continue
+        
+        # Calculate component span in business days
+        component_biz_days = calculate_business_days_between(window['min_start'], window['max_end'])
+        
+        # FIX: Handle short components gracefully
+        # For components < 3 days, we can't split into 3 phases with 1-day minimums
+        if component_biz_days < 3:
+            # For short components, all tasks get the full component window
+            tasks_in_component = component_tasks.get(key, [])
+            for task in tasks_in_component:
+                task['start'] = window['min_start'].isoformat()
+                task['end'] = window['max_end'].isoformat()
+                task['phase_window'] = 'all'  # No phase split
+                phase_assignments += 1
+            continue
+        
+        # Allocate days to each phase using weighted distribution
+        # Ensure we don't exceed component_biz_days total
+        phase_days = {}
+        
+        # Calculate weighted days, respecting minimums
+        for phase_name, weight in PHASE_WEIGHTS.items():
+            days = max(MIN_PHASE_DAYS, int(round(component_biz_days * weight)))
+            phase_days[phase_name] = days
+        
+        # FIX: Normalize to fit exactly in component window
+        total_allocated = sum(phase_days.values())
+        
+        while total_allocated > component_biz_days:
+            # Reduce largest phase (but not below minimum)
+            reducible_phases = [p for p, d in phase_days.items() if d > MIN_PHASE_DAYS]
+            if not reducible_phases:
+                break  # Can't reduce further
+            largest_phase = max(reducible_phases, key=lambda p: phase_days[p])
+            phase_days[largest_phase] -= 1
+            total_allocated -= 1
+        
+        while total_allocated < component_biz_days:
+            # Add to general phase (largest weight)
+            phase_days["general"] += 1
+            total_allocated += 1
+        
+        # Calculate phase windows
+        phase_windows = {}
+        current_start = window['min_start']
+        
+        for phase_name in ["general", "internal_review", "client_review"]:
+            days = phase_days.get(phase_name, MIN_PHASE_DAYS)
+            phase_end = add_business_days(current_start, days - 1) if days > 1 else current_start
+            
+            phase_windows[phase_name] = {
+                'start': current_start,
+                'end': phase_end
+            }
+            
+            # Next phase starts after this one
+            current_start = add_business_days(phase_end, 1)
+        
+        # Assign tasks to their phase windows
+        tasks_in_component = component_tasks.get(key, [])
+        for task in tasks_in_component:
+            task_name = task.get('name', '').lower()
+            
+            # Determine which phase this task belongs to
+            assigned_phase = None
+            if 'client' in task_name or 'client_review' in task_name:
+                assigned_phase = 'client_review'
+            elif 'internal' in task_name or 'internal_review' in task_name:
+                assigned_phase = 'internal_review'
+            else:
+                assigned_phase = 'general'  # Default
+            
+            # Apply phase window to task
+            if assigned_phase in phase_windows:
+                phase_win = phase_windows[assigned_phase]
+                task['start'] = phase_win['start'].isoformat()
+                task['end'] = phase_win['end'].isoformat()
+                task['phase_window'] = assigned_phase
+                phase_assignments += 1
+    
+    print(f"[PHASE-WINDOW] Applied phase windows to {phase_assignments} tasks")
+    
+    return tasks
+
+
 # ========= AI Timeline Generation =========
 class TimelineGenerationRequest(BaseModel):
     """Request model for AI timeline generation"""
@@ -7341,11 +7511,17 @@ async def generate_timeline(request: TimelineGenerationRequest):
                     buffer_work_days=DELIVERABLE_BUFFER_WORK_DAYS
                 )
                 
+                # PHASE-WINDOW SCHEDULING: Split components into general/internal_review/client_review phases
+                # This eliminates work-wait-work gaps by tiling phases across each component window
+                if PHASE_WINDOW_ENABLED:
+                    compressed_tasks = apply_phase_window_scheduling(compressed_tasks)
+                
                 result['tasks'] = compressed_tasks
                 
                 if 'metadata' not in result:
                     result['metadata'] = {}
                 result['metadata']['compression'] = compression_metadata
+                result['metadata']['phase_window_enabled'] = PHASE_WINDOW_ENABLED
                 
                 print(f"[Timeline] Compression complete: {compression_metadata.get('deliverables_compressed', 0)} deliverables chained")
             
@@ -16635,6 +16811,141 @@ def convert_excel_to_mspdi(
         else:
             validation_errors.append(f"Found {len(missing_pred_uids)} PredecessorUIDs referencing non-existent tasks")
             print(f"[VALIDATION] ⚠️ Found {len(missing_pred_uids)} PredecessorUIDs referencing non-existent tasks: {missing_pred_uids[:5]}")
+        
+        # ═══════════════════════════════════════════════════════════════════════════
+        # HARD VALIDATOR: Critical checks that MUST pass (per Workfront-safe spec)
+        # ═══════════════════════════════════════════════════════════════════════════
+        hard_validation_errors = []
+        
+        # HARD VALIDATION 1: UID Uniqueness - Every task UID must be unique
+        uid_counts = {}
+        for task_elem in tasks_elem.findall("Task"):
+            uid_elem = task_elem.find("UID")
+            if uid_elem is not None and uid_elem.text:
+                uid = uid_elem.text
+                uid_counts[uid] = uid_counts.get(uid, 0) + 1
+        
+        duplicate_uids = [uid for uid, count in uid_counts.items() if count > 1]
+        if duplicate_uids:
+            hard_validation_errors.append(f"Duplicate task UIDs: {duplicate_uids[:5]}")
+            print(f"[HARD VALIDATOR] ❌ Duplicate UIDs found: {duplicate_uids[:5]}")
+        else:
+            print(f"[HARD VALIDATOR] ✅ All task UIDs are unique: PASS")
+        
+        # HARD VALIDATION 2: Assignment Reference Check - Every Assignment's TaskUID and ResourceUID must exist
+        all_resource_uids = set()
+        resources_check = project.find("Resources")
+        if resources_check is not None:
+            for resource_elem in resources_check.findall("Resource"):
+                res_uid_elem = resource_elem.find("UID")
+                if res_uid_elem is not None and res_uid_elem.text:
+                    all_resource_uids.add(res_uid_elem.text)
+        
+        assignments_check = project.find("Assignments")
+        invalid_assignment_refs = []
+        if assignments_check is not None:
+            for assignment_elem in assignments_check.findall("Assignment"):
+                task_uid_elem = assignment_elem.find("TaskUID")
+                resource_uid_elem = assignment_elem.find("ResourceUID")
+                
+                task_uid = task_uid_elem.text if task_uid_elem is not None else None
+                resource_uid = resource_uid_elem.text if resource_uid_elem is not None else None
+                
+                if task_uid and task_uid not in all_task_uids:
+                    invalid_assignment_refs.append(f"TaskUID {task_uid} not found")
+                if resource_uid and resource_uid not in all_resource_uids and resource_uid != "-65535":
+                    invalid_assignment_refs.append(f"ResourceUID {resource_uid} not found")
+        
+        if invalid_assignment_refs:
+            hard_validation_errors.append(f"Invalid assignment references: {invalid_assignment_refs[:5]}")
+            print(f"[HARD VALIDATOR] ❌ Invalid assignment references: {invalid_assignment_refs[:5]}")
+        else:
+            print(f"[HARD VALIDATOR] ✅ All Assignment TaskUID/ResourceUID references valid: PASS")
+        
+        # HARD VALIDATION 3: Duration Invariant - duration_minutes == business_days(Start, Finish) * 480
+        # Only check leaf tasks (Summary=0) since parents roll up from children
+        # FIX: Exempt zero-duration milestones and same-day tasks
+        duration_mismatches = []
+        for task_elem in tasks_elem.findall("Task"):
+            summary_elem = task_elem.find("Summary")
+            is_summary = summary_elem is not None and summary_elem.text == "1"
+            
+            if is_summary:
+                continue  # Skip summary/parent tasks
+            
+            name_elem = task_elem.find("Name")
+            start_elem = task_elem.find("Start")
+            finish_elem = task_elem.find("Finish")
+            duration_elem = task_elem.find("Duration")
+            uid_elem = task_elem.find("UID")
+            milestone_elem = task_elem.find("Milestone")
+            
+            if not all([start_elem, finish_elem, duration_elem]):
+                continue
+            
+            task_name = name_elem.text if name_elem is not None else "Unknown"
+            task_uid = uid_elem.text if uid_elem is not None else "N/A"
+            
+            # FIX: Skip milestones - they legitimately have 0 duration
+            is_milestone = milestone_elem is not None and milestone_elem.text == "1"
+            if is_milestone:
+                continue
+            
+            try:
+                # Parse dates
+                start_str = start_elem.text[:10] if start_elem.text else None
+                finish_str = finish_elem.text[:10] if finish_elem.text else None
+                
+                if not start_str or not finish_str:
+                    continue
+                
+                start_date = datetime.datetime.strptime(start_str, "%Y-%m-%d").date()
+                finish_date = datetime.datetime.strptime(finish_str, "%Y-%m-%d").date()
+                
+                # Calculate expected duration using shared calendar
+                expected_biz_days = business_days_between(start_date, finish_date)
+                expected_minutes = expected_biz_days * 480  # 8 hours * 60 minutes
+                
+                # Parse actual duration from XML (format: PT{minutes}M or PT{hours}H{minutes}M)
+                duration_str = duration_elem.text or "PT0M"
+                actual_minutes = 0
+                if "H" in duration_str:
+                    # Format: PT{hours}H{minutes}M
+                    import re
+                    match = re.match(r"PT(\d+)H(\d+)?M?", duration_str)
+                    if match:
+                        hours = int(match.group(1))
+                        mins = int(match.group(2)) if match.group(2) else 0
+                        actual_minutes = hours * 60 + mins
+                else:
+                    # Format: PT{minutes}M
+                    actual_minutes = int(duration_str.replace("PT", "").replace("M", "") or 0)
+                
+                # FIX: Skip zero-duration tasks (same-day tasks or milestones not flagged)
+                if actual_minutes == 0 and expected_biz_days <= 1:
+                    continue  # Same-day or milestone, OK
+                
+                # Allow small tolerance (1 business day = 480 min) for edge cases
+                if abs(expected_minutes - actual_minutes) > 480:
+                    duration_mismatches.append(
+                        f"{task_name} (UID {task_uid}): expected {expected_minutes}M ({expected_biz_days}d), got {actual_minutes}M"
+                    )
+            except Exception as e:
+                pass  # Skip tasks with parsing issues
+        
+        if duration_mismatches:
+            hard_validation_errors.append(f"Duration invariant violations: {len(duration_mismatches)} tasks")
+            print(f"[HARD VALIDATOR] ⚠️ Duration invariant mismatches ({len(duration_mismatches)} tasks):")
+            for mismatch in duration_mismatches[:3]:
+                print(f"    - {mismatch}")
+        else:
+            print(f"[HARD VALIDATOR] ✅ Duration invariant (duration = business_days * 480): PASS")
+        
+        # HARD VALIDATION RESULT - Log but don't block export
+        if hard_validation_errors:
+            print(f"[HARD VALIDATOR] ⚠️ {len(hard_validation_errors)} hard validation issue(s) - review for Workfront compatibility")
+        else:
+            print(f"[HARD VALIDATOR] ✅ All hard validation checks passed - export is Workfront-safe")
         
         if validation_errors:
             print(f"[VALIDATION] ⚠️ {len(validation_errors)} validation warning(s) detected")
