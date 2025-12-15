@@ -14537,9 +14537,18 @@ def convert_excel_to_mspdi(
             
             # Sort by WBS to maintain hierarchy order
             def wbs_sort_key(row):
+                """Sort WBS segments using tuple of (type, value) to avoid mixed int/str comparison."""
                 wbs = row.get("WBS", "")
-                parts = wbs.split(".")
-                return [int(p) if p.isdigit() else p for p in parts]
+                if not wbs:
+                    return ()
+                parts = str(wbs).split(".")
+                key = []
+                for p in parts:
+                    try:
+                        key.append((0, int(p)))  # Numeric: (0, int_value)
+                    except ValueError:
+                        key.append((1, p))  # Text: (1, str_value)
+                return tuple(key)
             
             expanded_rows.sort(key=wbs_sort_key)
             
@@ -14997,8 +15006,15 @@ def convert_excel_to_mspdi(
             # Sort by WBS order (natural order: 1.1, 1.2, 1.3, ...)
             if l2_candidates:
                 def wbs_sort_key(item):
+                    """Sort WBS segments using tuple of (type, value) to avoid mixed int/str comparison."""
                     parts = item["wbs"].split(".")
-                    return [int(p) if p.isdigit() else p for p in parts]
+                    key = []
+                    for p in parts:
+                        try:
+                            key.append((0, int(p)))  # Numeric: (0, int_value)
+                        except ValueError:
+                            key.append((1, p))  # Text: (1, str_value)
+                    return tuple(key)
                 l2_candidates.sort(key=wbs_sort_key)
                 first_l2_deliverable_uid = l2_candidates[0]["uid"]
                 print(f"[TIGHT WATERFALL] 🎯 First L2 deliverable UID={first_l2_deliverable_uid} (WBS {l2_candidates[0]['wbs']}) will use SNET constraint")
@@ -15901,9 +15917,15 @@ def convert_excel_to_mspdi(
             
             # Sort by WBS order (natural order: 1.1, 1.2, 1.3, ...)
             def wbs_sort_key(item):
-                """Sort WBS segments numerically (handles 1.10 > 1.2)"""
+                """Sort WBS segments using tuple of (type, value) to avoid mixed int/str comparison."""
                 parts = item["wbs"].split(".")
-                return [int(p) if p.isdigit() else p for p in parts]
+                key = []
+                for p in parts:
+                    try:
+                        key.append((0, int(p)))  # Numeric: (0, int_value)
+                    except ValueError:
+                        key.append((1, p))  # Text: (1, str_value)
+                return tuple(key)
             
             l2_deliverables.sort(key=wbs_sort_key)
             
