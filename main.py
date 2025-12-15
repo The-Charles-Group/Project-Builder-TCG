@@ -7959,27 +7959,56 @@ def api_build(payload: BuildPayload):
         # If session_id is provided and SCENARIO_STORE has a working scenario,
         # return it instead of rebuilding (unless reset=true in future)
         # This prevents the 137→98 hours regression when clicking "Build Scenario" again
+        # IMPORTANT: Only use cache if selected deliverables match (fixes pricing aggregation bug)
         if payload.session_id and payload.session_id in SCENARIO_STORE:
             working_scenario = get_working_scenario(payload.session_id)
             if working_scenario and working_scenario.get("items"):
-                totals = working_scenario.get("totals", {})
-                total_hours = totals.get("hours", 0)
-                total_price = totals.get("price", 0)
+                # Extract deliverable codes from cached scenario, filtering out blank codes
+                cached_codes = set(
+                    str(item.get("deliverable_code", "")).strip()
+                    for item in working_scenario.get("items", [])
+                    if item.get("deliverable_code") and str(item.get("deliverable_code", "")).strip()
+                )
+                requested_codes = set(
+                    str(code).strip() 
+                    for code in payload.selected_deliverable_codes
+                    if code and str(code).strip()
+                )
                 
-                print(f"[/api/build] ✅ Using SCENARIO_STORE[{payload.session_id}] "
-                      f"hours={total_hours} price={total_price} (preserving Step 3 edits)")
-                
-                # Update _CURRENT_SCENARIOS for Step 4 compatibility
-                _CURRENT_SCENARIOS["A"] = working_scenario
-                
-                return {
-                    "scenarios": {"A": working_scenario},
-                    "totals": {"A": totals},
-                    "total_hours": total_hours,
-                    "total_price": total_price,
-                    "cached": True,
-                    "message": "Using working scenario from SCENARIO_STORE (Step 3 edits preserved)"
-                }
+                # Only use cache if selected deliverables match
+                if cached_codes == requested_codes:
+                    totals = working_scenario.get("totals", {})
+                    total_hours = totals.get("hours", 0)
+                    total_price = totals.get("price", 0)
+                    
+                    print(f"[/api/build] ✅ Using SCENARIO_STORE[{payload.session_id}] "
+                          f"hours={total_hours} price={total_price} (preserving Step 3 edits, {len(cached_codes)} items match)")
+                    
+                    # Update _CURRENT_SCENARIOS for Step 4 compatibility
+                    _CURRENT_SCENARIOS["A"] = working_scenario
+                    
+                    return {
+                        "scenarios": {"A": working_scenario},
+                        "totals": {"A": totals},
+                        "total_hours": total_hours,
+                        "total_price": total_price,
+                        "cached": True,
+                        "message": "Using working scenario from SCENARIO_STORE (Step 3 edits preserved)"
+                    }
+                else:
+                    # Deliverables changed - invalidate working scenario while preserving metadata
+                    print(f"[/api/build] 🔄 Deliverables changed: cached={len(cached_codes)} ({cached_codes}), requested={len(requested_codes)} ({requested_codes}) - rebuilding")
+                    # Clear scenario, baseline, AND totals to prevent stale data
+                    state = get_session_state(payload.session_id)
+                    state["scenario"] = None
+                    state["baseline"] = None
+                    state["totals"] = {"hours": 0.0, "price": 0.0}  # Clear totals to prevent stale data
+                    state["metadata"]["updated_at"] = time.time()
+                    state["metadata"]["rebuild_reason"] = "deliverables_changed"
+                    SCENARIO_STORE[payload.session_id] = state
+                    # Persist immediately to DB so reload doesn't restore old state
+                    _save_scenario_to_db(payload.session_id, state)
+                    print(f"[/api/build] Cache invalidated and persisted to DB")
 
         # Prepare UI intent
         pricing_mode = payload.pricing_mode
