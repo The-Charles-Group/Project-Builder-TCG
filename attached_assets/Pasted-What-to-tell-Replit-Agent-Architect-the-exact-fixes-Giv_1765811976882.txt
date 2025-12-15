@@ -1,0 +1,141 @@
+What to tell Replit (Agent + Architect): the exact fixes
+
+Give them this as the implementation checklist.
+
+A) Restore hierarchy: Deliverables → Components → Tasks
+
+Remove the OutlineLevel depth cap.
+Delete/disable the logic that skips OutlineLevel > 3. 
+
+12.12.25 app gantt timeline sho…
+
+Export 4 levels minimum:
+
+L1: Project Summary (summary)
+
+L2: Deliverable (summary)
+
+L3: Component (summary)
+
+L4: Task (leaf)
+
+Acceptance criteria:
+
+Workfront import shows collapsible Deliverable rows, inside them Component rows, inside them Task rows.
+
+B) Bring back resources + assignment breakdowns
+
+STOP deleting <Resources> and <Assignments> in “Workfront cleanup”.
+That cleanup is currently unconditional. 
+
+12.12.25 app gantt timeline sho…
+
+
+Change it to either:
+
+remove that section entirely, OR
+
+gate it behind a flag (e.g., STRIP_ASSIGNMENTS_FOR_WF = False by default)
+
+Keep the existing resource creation (it’s already there). 
+
+12.12.25 app gantt timeline sho…
+
+Keep assignment creation for leaf tasks (already implemented). 
+
+12.09.25 - step 3 component box
+
+Acceptance criteria (automated in code before download):
+
+XML contains <Resources> with N > 0
+
+XML contains <Assignments> with N > 0
+
+In Workfront, “Assignments” and “Assignment Breakdown” columns populate on leaf tasks.
+
+C) Prevent inflated hours (double-counting)
+
+Ensure summary tasks (deliverables/components) have NO assignments and Work=0
+You already have logic to skip assignments for summary tasks — keep that. 
+
+12.09.25 - step 3 component box
+
+Also ensure you’re not setting Work/PlannedHours on deliverable/component summary rows if child tasks already sum to that effort (otherwise Workfront will roll up + add).
+
+Acceptance criteria:
+
+In Workfront: Project Planned Hours ≈ sum of leaf task planned hours, not “leaf sum + deliverable sum”.
+
+D) Fix “work–wait–work” and weird gaps
+
+Pick ONE of these strategies (don’t mix them):
+
+Strategy 1 (recommended): make slack explicit
+
+Keep the deliverable span (e.g., 64 business days) as the parent timeline
+
+Make leaf tasks tight to their effort (Duration ≈ Work/8h)
+
+Create explicit “Client Review Window / Waiting” tasks with:
+
+Duration = waiting days
+
+Work = 0
+
+No assignments
+This removes the “mystery idle time” and makes the schedule read correctly.
+
+Strategy 2: keep low-utilization tasks but avoid bad predecessor ordering
+
+Keep your long durations + low units (if you truly want tasks stretched)
+
+Fix predecessor generation so tasks don’t depend on the wrong future task (this is what creates the big “gaps”).
+In practice: enforce deterministic ordering within each component and set FS links with 0 lag.
+
+Acceptance criteria:
+
+No unexplained multi-week gaps between sequential tasks unless the gap is a named “review/wait” task.
+
+E) Make the export consistent for the whole project
+
+Tell them to add a “pre-flight validator” before writing the XML:
+
+Max OutlineLevel ≥ 4
+
+Count(Resources) > 0
+
+Count(Assignments) > 0
+
+No Assignments where TaskUID is a summary task
+
+Every PredecessorUID exists in Tasks
+
+Project StartDate/FinishDate match min/max task dates (you already warn about this). 
+
+12.12.25 app gantt timeline sho…
+
+Tasklist template (Deliverables → Components → Tasks)
+
+Use this pattern for every deliverable:
+
+Deliverable (summary)
+
+Component A (summary)
+
+Task: Production (assigned roles, work hours)
+
+Task: QA (optional, small work)
+
+Task: Internal Review (optional, small work)
+
+Task: Client Review Window (duration-only, 0 work)
+
+Task: Revisions (assigned roles, work hours)
+
+Task: Final Delivery (milestone or 0 work)
+
+Component B (summary)
+
+same structure…
+
+This maps cleanly to Workfront, preserves your deliverable/component taxonomy, and gives you a place to put “waiting” time without distorting actual work.

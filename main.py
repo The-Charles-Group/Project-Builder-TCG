@@ -14467,8 +14467,12 @@ def convert_excel_to_mspdi(
                     parent_wbs = row.get("ParentWBS", "")
                     assignment_groups[parent_wbs].append(row)
             
-            # Add non-assignment rows first
-            expanded_rows.extend(non_assignment_rows)
+            # Add non-assignment rows first (with identity mapping in uid_alias_map)
+            for row in non_assignment_rows:
+                expanded_rows.append(row)
+                # CRITICAL FIX: Add non-assignment tasks to uid_alias_map with identity mapping
+                # This ensures ALL UIDs have a mapping, not just assignment tasks
+                uid_alias_map[row["UID"]] = row["UID"]
             
             # Process assignment groups - each assignment becomes its own task
             for parent_wbs, assignments in assignment_groups.items():
@@ -14477,7 +14481,16 @@ def convert_excel_to_mspdi(
                     role = str(asgn.get("Role", "") or asgn.get("RoleStr", "")).strip()
                     seniority = str(asgn.get("Seniority", "Mid")).strip() if asgn.get("Seniority") else "Mid"
                     task_name = str(asgn.get("Name", "")).strip()
-                    hours = float(asgn.get("PlannedHours", 0) or asgn.get("Planned_Hours", 0) or 0)
+                    
+                    # EDGE CASE HANDLING: Safely extract hours with None/NaN/negative protection
+                    hours_raw = asgn.get("PlannedHours") or asgn.get("Planned_Hours") or 0
+                    if hours_raw is None or (hasattr(pd, 'isna') and pd.isna(hours_raw)):
+                        hours = 0.0
+                    else:
+                        try:
+                            hours = max(0.0, float(hours_raw))  # Clamp negative to zero
+                        except (ValueError, TypeError):
+                            hours = 0.0
                     
                     # Create new UID for this assignment (unique, traceable)
                     new_uid = base_uid * 1000 + idx + 1
@@ -14510,9 +14523,14 @@ def convert_excel_to_mspdi(
                             "PlannedHours": hours,  # Use assignment-specific hours
                         }
                     
-                    # Map original UID to first assignment's new UID (for dependencies)
-                    if base_uid not in uid_alias_map:
-                        uid_alias_map[base_uid] = new_uid
+                    # CRITICAL FIX: Add NEW assignment UID to uid_alias_map (identity mapping)
+                    # This ensures the new UID can be looked up in dependency resolution
+                    uid_alias_map[new_uid] = new_uid
+                    
+                    # Map original UID to LAST (terminal) assignment's UID for dependencies
+                    # This ensures dependencies to the original task point to the final assignment
+                    # (overwrite on each iteration so final iteration wins)
+                    uid_alias_map[base_uid] = new_uid
                     
                     print(f"[ASSIGNMENT EXPORT] Created: '{new_name}' UID={new_uid} Hours={hours}")
             
@@ -15734,12 +15752,25 @@ def convert_excel_to_mspdi(
         
         # Add PredecessorLink elements for all final edges
         # WATERFALL FIX: Use wbs_to_new_uid which has remapped UIDs after chronological sort
+        # ASSIGNMENT FIX: Apply uid_alias_map to translate original UIDs to assignment UIDs
         print(f"[XML-EXPORT] Writing {len(all_edges)} PredecessorLink elements...")
         skipped_zero_duration = 0
+        alias_translations = 0
         for pred_wbs, succ_wbs in all_edges:
-            pred_uid = wbs_to_new_uid.get(pred_wbs)
-            succ_uid = wbs_to_new_uid.get(succ_wbs)
-            if pred_uid and succ_uid:
+            pred_uid_raw = wbs_to_new_uid.get(pred_wbs)
+            succ_uid_raw = wbs_to_new_uid.get(succ_wbs)
+            if pred_uid_raw and succ_uid_raw:
+                # CRITICAL FIX: Apply uid_alias_map to translate UIDs for assignment tasks
+                # When assignments are expanded, original UIDs are replaced with assignment UIDs
+                # The uid_alias_map maps: original_uid → first_assignment_uid (or self for non-assignments)
+                pred_uid = uid_alias_map.get(pred_uid_raw, pred_uid_raw)
+                succ_uid = uid_alias_map.get(succ_uid_raw, succ_uid_raw)
+                
+                if pred_uid != pred_uid_raw or succ_uid != succ_uid_raw:
+                    alias_translations += 1
+                    if alias_translations <= 5:  # Log first 5 translations
+                        print(f"[DEP-ALIAS] Translated: {pred_uid_raw}→{pred_uid}, {succ_uid_raw}→{succ_uid}")
+                
                 # Find the successor task element and add a PredecessorLink (MSPDI: no wrapper)
                 for task_elem in tasks_elem.findall("Task"):
                     task_uid_elem = task_elem.find("UID")
@@ -15761,6 +15792,9 @@ def convert_excel_to_mspdi(
                         SubElement(pred_link, "LinkLag").text = "0"
                         SubElement(pred_link, "LagFormat").text = "7"     # 7 = days
                         break
+        
+        if alias_translations > 0:
+            print(f"[DEP-ALIAS] ✅ Translated {alias_translations} dependency UIDs via uid_alias_map")
         
         if skipped_zero_duration > 0:
             print(f"[VALIDATION] ⏭️  Skipped {skipped_zero_duration} PredecessorLink(s) with zero-duration tasks")
