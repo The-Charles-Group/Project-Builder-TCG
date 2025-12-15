@@ -14428,14 +14428,115 @@ def convert_excel_to_mspdi(
             print(f"[MULTI-ASSIGN] Summary: {len(rows_input)} rows → {len(merged_rows)} tasks ({len(uid_alias_map)} merged)")
             return merged_rows, uid_alias_map
         
-        # Multi-assignment grouping: Controlled by ENABLE_MULTI_ASSIGNMENT flag
+        # ====================================================================================
+        # ASSIGNMENT-LEVEL EXPORT: When ENABLE_MULTI_ASSIGNMENT is True, emit one XML Task
+        # per role assignment (the OPPOSITE of the old merge behavior).
+        # This gives per-role granularity in Workfront:
+        #   "Brand Narrative - Designer (Mid): 8h" instead of "Brand Narrative: 16h"
+        # ====================================================================================
+        def expand_assignments_to_separate_tasks(rows_input, uid_to_sched_map):
+            """
+            Expand role assignments into separate XML Tasks.
+            
+            For each task row that has a Role assigned:
+            - Create a new task with UID = base_uid * 1000 + assignment_index
+            - Set Name = "{task_name} - {role} ({seniority})"
+            - Keep original hours on the assignment task
+            
+            Parent summary tasks (no Role) pass through unchanged.
+            
+            Returns:
+                - expanded_rows: List of row dicts (one per assignment)
+                - uid_alias_map: Maps old UIDs to new primary UIDs for dependency rewrites
+            """
+            expanded_rows = []
+            uid_alias_map = {}
+            
+            # Group rows by their parent task WBS to find assignments under same task
+            from collections import defaultdict
+            assignment_groups = defaultdict(list)
+            non_assignment_rows = []
+            
+            for row in rows_input:
+                role_val = row.get("Role", "") or row.get("RoleStr", "")
+                if not role_val or pd.isna(role_val) or str(role_val).strip() == "" or str(role_val).lower() == "unassigned":
+                    # No role - this is a summary/parent task, pass through
+                    non_assignment_rows.append(row)
+                else:
+                    # Has role - this is an assignment, group by parent WBS
+                    parent_wbs = row.get("ParentWBS", "")
+                    assignment_groups[parent_wbs].append(row)
+            
+            # Add non-assignment rows first
+            expanded_rows.extend(non_assignment_rows)
+            
+            # Process assignment groups - each assignment becomes its own task
+            for parent_wbs, assignments in assignment_groups.items():
+                for idx, asgn in enumerate(assignments):
+                    base_uid = asgn["UID"]
+                    role = str(asgn.get("Role", "") or asgn.get("RoleStr", "")).strip()
+                    seniority = str(asgn.get("Seniority", "Mid")).strip() if asgn.get("Seniority") else "Mid"
+                    task_name = str(asgn.get("Name", "")).strip()
+                    hours = float(asgn.get("PlannedHours", 0) or asgn.get("Planned_Hours", 0) or 0)
+                    
+                    # Create new UID for this assignment (unique, traceable)
+                    new_uid = base_uid * 1000 + idx + 1
+                    
+                    # Create expanded task name with role/seniority
+                    if role and role.lower() != "unassigned":
+                        if seniority and seniority.lower() != "mid":
+                            new_name = f"{task_name} - {role} ({seniority})"
+                        else:
+                            new_name = f"{task_name} - {role}"
+                    else:
+                        new_name = task_name
+                    
+                    # Copy row with new UID and name
+                    expanded_row = {
+                        **asgn,
+                        "UID": new_uid,
+                        "Name": new_name,
+                        "PlannedHours": hours,
+                        "_original_uid": base_uid,  # Track original for dependency rewrites
+                        "_is_assignment_task": True,  # Flag for duration calculation
+                    }
+                    expanded_rows.append(expanded_row)
+                    
+                    # CRITICAL: Copy schedule data for the new UID from original
+                    # This ensures Start/Finish dates are available for XML export
+                    if base_uid in uid_to_sched_map:
+                        uid_to_sched_map[new_uid] = {
+                            **uid_to_sched_map[base_uid],
+                            "PlannedHours": hours,  # Use assignment-specific hours
+                        }
+                    
+                    # Map original UID to first assignment's new UID (for dependencies)
+                    if base_uid not in uid_alias_map:
+                        uid_alias_map[base_uid] = new_uid
+                    
+                    print(f"[ASSIGNMENT EXPORT] Created: '{new_name}' UID={new_uid} Hours={hours}")
+            
+            # Sort by WBS to maintain hierarchy order
+            def wbs_sort_key(row):
+                wbs = row.get("WBS", "")
+                parts = wbs.split(".")
+                return [int(p) if p.isdigit() else p for p in parts]
+            
+            expanded_rows.sort(key=wbs_sort_key)
+            
+            print(f"[ASSIGNMENT EXPORT] Summary: {len(rows_input)} rows → {len(expanded_rows)} tasks ({len(uid_alias_map)} assignments expanded)")
+            return expanded_rows, uid_alias_map
+        
+        # Multi-assignment export: Controlled by ENABLE_MULTI_ASSIGNMENT flag
+        # When True: Export one XML Task per role assignment (per-role granularity)
+        # When False: Keep tasks as-is (legacy behavior)
         if ENABLE_MULTI_ASSIGNMENT:
-            rows, uid_alias_map = group_multi_assignments(rows, uid_to_sched)
-            print(f"[EXPORT] Multi-assignment merging ENABLED - {len(uid_alias_map)} UIDs aliased")
+            rows, uid_alias_map = expand_assignments_to_separate_tasks(rows, uid_to_sched)
+            print(f"[EXPORT] Assignment-level export ENABLED - {len(uid_alias_map)} assignments expanded")
         else:
             # Identity mapping (each UID maps to itself)
             uid_alias_map = {row["UID"]: row["UID"] for row in rows}
-            print(f"[EXPORT] Multi-assignment merging DISABLED - exporting {len(rows)} tasks (one per role)")
+            print(f"[EXPORT] Assignment-level export DISABLED - exporting {len(rows)} tasks (merged)")
         
         # ====================================================================================
         # CHRONOLOGICAL WATERFALL SORTING
@@ -15050,65 +15151,69 @@ def convert_excel_to_mspdi(
                 SubElement(task, "ConstraintType").text = "5"  # Start No Later Than (for summaries)
             # Only set Duration/Work for non-summary leaf tasks
             else:
-                # WORKFRONT FIX: Duration MUST equal (Finish - Start) for ALL tasks
-                # NO 960-minute snapping - use actual timestamp difference
-                # This is critical to prevent Workfront from recalculating dates on import
+                # ====================================================================================
+                # ASSIGNMENT-LEVEL DURATION FIX: Use EFFORT-BASED duration (hours × 60 minutes)
+                # instead of calendar span for assignment tasks. This prevents Workfront from
+                # showing inflated Duration values (e.g., 560 days instead of 8 hours).
+                # ====================================================================================
                 
-                start_val = uid_to_sched[r["UID"]]["Start"]
-                finish_val = uid_to_sched[r["UID"]]["Finish"]
+                # Get PlannedHours from the row (assignment tasks have this set directly)
+                work_hours = float(r.get("PlannedHours", 0) or r.get("Planned_Hours", 0) or 0)
+                if pd.isna(work_hours):
+                    work_hours = 0
                 
-                # Robust datetime parser that handles timezone suffixes (Z, +00:00, etc.)
-                def to_datetime(val):
-                    if isinstance(val, datetime.datetime):
-                        return val
-                    elif isinstance(val, str):
-                        # Remove timezone suffixes for parsing
-                        val_clean = val.replace('Z', '+00:00')  # Convert Z to +00:00
-                        # Try parsing with fromisoformat (handles timezones)
-                        try:
-                            return datetime.datetime.fromisoformat(val_clean)
-                        except ValueError:
-                            # Fallback: strip timezone manually and parse
-                            val_clean = val.split('+')[0].split('-')
-                            # Rejoin date portion (first 3 parts: YYYY, MM, DD)
-                            val_clean = '-'.join(val_clean[:3]) + val_clean[3] if len(val_clean) > 3 else '-'.join(val_clean)
-                            val_clean = val_clean.split('.')[0]  # Remove milliseconds
-                            return datetime.datetime.fromisoformat(val_clean)
-                    else:
-                        return val
+                # Fallback: Check uid_to_sched if row doesn't have hours
+                if work_hours <= 0 and r["UID"] in uid_to_sched:
+                    sched_hours = uid_to_sched[r['UID']].get('PlannedHours', 0)
+                    if sched_hours and not pd.isna(sched_hours):
+                        work_hours = float(sched_hours)
                 
-                start_dt = to_datetime(start_val)
-                finish_dt = to_datetime(finish_val)
-                
-                # Work calculation: For multi-assignment tasks, sum all assignee hours
-                if r.get("multi_assignment") and "assignments" in r:
-                    # Multi-assignment: sum all assignee work hours
-                    total_work_hours = sum(a["work_hours"] for a in r["assignments"])
-                    work_minutes = int(total_work_hours * 60)
-                else:
-                    # Single assignment: use PlannedHours from Gantt (actual effort)
-                    work_hours = uid_to_sched[r['UID']].get('PlannedHours', 0)
-                    if pd.isna(work_hours):
-                        work_hours = 0
-                    work_minutes = max(0, int(work_hours * 60))
-                
+                work_minutes = max(0, int(work_hours * 60))
                 SubElement(task, "Work").text = f"PT{work_minutes}M"
                 
-                # WORKFRONT FIX: Duration = (Finish - Start) business days × 480 minutes
-                # This matches the calendar-based duration Workfront expects
-                try:
-                    biz_days_inclusive = calculate_business_days_between(start_dt.date(), finish_dt.date())
-                    duration_days = max(1, biz_days_inclusive - 1) if biz_days_inclusive > 1 else max(0, biz_days_inclusive)
-                    dur_minutes = duration_days * 480 if duration_days > 0 else 0
-                except Exception:
-                    # Fallback: use work-based calculation
-                    work_hours = work_minutes / 60.0
-                    if work_hours == 0:
-                        dur_minutes = 0
-                    else:
-                        import math
-                        required_days = max(1, math.ceil(work_hours / 8.0))
-                        dur_minutes = required_days * 480
+                # DURATION FIX: For assignment tasks, use EFFORT-BASED duration (hours × 60)
+                # This ensures Workfront shows "1 day" for 8 hours, not "95 days" from span
+                is_assignment_task = r.get("_is_assignment_task", False) or bool(r.get("Role"))
+                
+                if is_assignment_task and work_hours > 0:
+                    # EFFORT-BASED: Duration = Work (hours converted to minutes)
+                    # This is what Workfront expects for actual task effort
+                    dur_minutes = work_minutes
+                    print(f"[DURATION FIX] Assignment task '{name_txt[:50]}' - Effort-based: {work_hours}h = {dur_minutes} minutes")
+                else:
+                    # NON-ASSIGNMENT LEAF: Use calendar span for backwards compatibility
+                    try:
+                        start_val = uid_to_sched[r["UID"]]["Start"]
+                        finish_val = uid_to_sched[r["UID"]]["Finish"]
+                        
+                        def to_datetime(val):
+                            if isinstance(val, datetime.datetime):
+                                return val
+                            elif isinstance(val, str):
+                                val_clean = val.replace('Z', '+00:00')
+                                try:
+                                    return datetime.datetime.fromisoformat(val_clean)
+                                except ValueError:
+                                    val_clean = val.split('+')[0].split('-')
+                                    val_clean = '-'.join(val_clean[:3]) + val_clean[3] if len(val_clean) > 3 else '-'.join(val_clean)
+                                    val_clean = val_clean.split('.')[0]
+                                    return datetime.datetime.fromisoformat(val_clean)
+                            else:
+                                return val
+                        
+                        start_dt = to_datetime(start_val)
+                        finish_dt = to_datetime(finish_val)
+                        biz_days_inclusive = calculate_business_days_between(start_dt.date(), finish_dt.date())
+                        duration_days = max(1, biz_days_inclusive - 1) if biz_days_inclusive > 1 else max(0, biz_days_inclusive)
+                        dur_minutes = duration_days * 480 if duration_days > 0 else 0
+                    except Exception:
+                        # Fallback: use work-based calculation
+                        if work_hours == 0:
+                            dur_minutes = 0
+                        else:
+                            import math
+                            required_days = max(1, math.ceil(work_hours / 8.0))
+                            dur_minutes = required_days * 480
                 
                 SubElement(task, "Duration").text = f"PT{dur_minutes}M"
                 
