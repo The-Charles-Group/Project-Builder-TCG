@@ -1,0 +1,112 @@
+Copy/paste instructions for Replit (agent + architect)
+Goal
+
+Workfront import must produce: Deliverables → Components → Tasks, with:
+
+Correct Start/Finish matching the app
+
+Duration matching the app’s working-days logic
+
+Assignments + Assignment Breakdown visible on the appropriate row
+
+No duplicated hours, no “0.12 day” noise, no “work–wait–work” gaps unless explicitly intended
+
+1) Make the app timeline and XML export use the SAME scheduling source of truth
+
+Right now the app tooltip logic and the XML export logic can diverge (you’ve seen 1/15 in the app but 1/28 in XML). Fix by using one shared function/module that returns, for every WBS row:
+
+start_datetime
+
+finish_datetime
+
+working_minutes_between(start, finish) (Mon–Fri, 9–5, 480 min/day)
+
+Then:
+
+XML <Start> and <Finish> come directly from that.
+
+XML <Duration> is derived from that same calendar math.
+
+Do not compute duration from hours or from “effort days” if you expect Workfront bars to match the app bars.
+
+2) Stop creating “role subtasks” (that’s what’s causing .12 day clutter + duplication)
+
+You currently have tasks like client_review - Account Manager 
+
+St.Regis_Nashville_Branding_Age…
+
+. Replace this with Assignments instead:
+
+Correct structure:
+
+Deliverable (summary, no work)
+
+Component (summary, no work)
+
+Task “Client review” (leaf, has assignments)
+
+Task “Internal review” (leaf, has assignments)
+
+Task “Production / Design” (leaf, has assignments)
+
+Task “QA” (leaf, has assignments)
+
+Then add multiple MSP <Assignment> entries to each leaf task (one per role) so Workfront shows Assignment Breakdown on the leaf task row.
+
+This gets you:
+
+Deliverables → Components → Tasks (exactly 3 levels)
+
+No micro-duration role subtasks
+
+Assignment Breakdown works the way Workfront expects
+
+3) Hours must exist in ONE place only (leaf tasks), never duplicated
+
+Rules:
+
+Deliverable rows: Work = PT0M
+
+Component rows: Work = PT0M
+
+Task rows: Work = sum(role_hours_for_that_task)
+
+If you keep “task tags” (qa/internal_review/client_review/general), you must split the component’s hours across those tasks. Do not copy the full component hours onto every tag-task.
+
+4) Fix duration math so Workfront matches the app
+
+For every leaf task:
+
+DurationMinutes = working_minutes_between(Start, Finish)
+
+XML: <Duration>PT{DurationMinutes}M</Duration>
+
+For the deliverable/component summaries:
+
+Set Start = min(child starts)
+
+Finish = max(child finishes)
+
+Duration derived the same way
+
+This prevents “Start/Finish says 11 calendar days but Duration says 8 days” situations (which Workfront resolves by doing its own thing).
+
+5) Remove “work–wait–work” unless you explicitly want slack
+
+If you want continuous flow inside a component:
+
+Make task dependencies Finish-to-Start with 0 lag
+
+Schedule the leaf tasks sequentially so the next task starts the next working minute/day after predecessor finishes
+
+If you want parallel work, then don’t chain everything FS; group by role and allow overlap.
+
+6) Don’t cap OutlineLevel in a way that lies about the hierarchy
+
+Your code comments say you’re keeping full WBS but “capping OutlineLevel” 
+
+12.12.25 app gantt timeline sho…
+
+ — that can confuse importers if WBS depth and OutlineLevel don’t agree.
+
+If you truly want 3 levels, then emit only 3 levels (don’t emit deeper WBS rows at all). Don’t keep deep WBS and “pretend” it’s shallow via OutlineLevel.

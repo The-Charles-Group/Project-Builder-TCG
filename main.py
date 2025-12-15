@@ -4787,43 +4787,28 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                         else:
                             base_offset = dstart + offset_by_tg.get(tg, 0) + ((month_idx-1) * total_deliv_duration)
 
-                        # ZERO COST: All cost comes from deliverable FixedCost
-                        rows.append({
-                            "Row_ID": nested_task_data.get("row_id", "") if nested_task_data else "",
-                            "Deliverable_Code": dcode, 
-                            "Task_Code": nested_task_data.get("task_code", "") if nested_task_data else "",
-                            "Service_Department": svc_comp,
-                            "Deliverable": deliv_label,
-                            "Project_Name": project_name, "WBS_ID": wbs_task, "Parent_WBS_ID": wbs_comp,
-                            "Task_Name": label, "Component": comp, "Task": label,
-                            "Role": "", "Seniority": "",
-                            "Planned_Hours": "",   # stays on role rows
-                            "Start_Offset_Days": base_offset,
-                            "Duration_Days": dur,
-                            "Dependencies": (wbs_comp if (k==1 and month_idx==1) else (prev_task_last_wbs if k>1 else prev_month_last_wbs)),
-                            "Assignee_External_ID": "", "Notes": "",
-                            "Rate_USD": 0,  # Cost comes from FixedCost only
-                            "Price_USD": 0,  # Cost comes from FixedCost only
-                            "FixedCost": 0   # No FixedCost on tasks - only on deliverable
-                        })
-
                         # ============================================================
-                        # Role/Assignment rows for this task
-                        # Nested path uses assignments from task; legacy uses DB lookup
+                        # Build role assignments FIRST (for MSP Assignment export)
+                        # 3-LEVEL HIERARCHY REFACTOR: No longer creating L5 role subtask rows
+                        # Instead, assignments are stored as JSON metadata on the L4 task row
                         # ============================================================
                         target_task_hours = int(tg_target.get(tg, 0))
+                        task_assignments = []  # List of {role, seniority, hours} for MSP Assignments
                         
                         if use_nested_path and nested_task_data and nested_task_data.get("assignments"):
                             # NESTED PATH: Use assignments from task structure
                             assignments = nested_task_data.get("assignments", [])
-                            flo = {}
                             for asgn in assignments:
                                 role = asgn.get("role", "")
                                 sen = asgn.get("seniority", "Mid")
                                 hrs = float(asgn.get("allocation_hours", 0))
                                 if hrs > 0:
-                                    flo[(role, sen)] = int(round(hrs))
-                            print(f"[WBS Builder] Using NESTED assignments for {dcode}/{comp}/{tg}: {len(assignments)} assignments")
+                                    task_assignments.append({
+                                        "role": role,
+                                        "seniority": sen,
+                                        "hours": int(round(hrs))
+                                    })
+                            print(f"[WBS Builder] Using NESTED assignments for {dcode}/{comp}/{tg}: {len(task_assignments)} assignments")
                         else:
                             # LEGACY PATH: Use DB lookup for role hours
                             hrs_role_df = DB.hours_by_role_for_component_task(dcode, comp, tg, scen_col)
@@ -4839,52 +4824,52 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                             order = sorted(raw_map.keys(), key=lambda kk: (raw_scaled[kk]-flo[kk]), reverse=True)
                             for kk in order[:max(0, rem)]:
                                 flo[kk] += 1
+                            
+                            # Convert to assignment list format
+                            for (role, sen), h in flo.items():
+                                if h > 0:
+                                    task_assignments.append({
+                                        "role": role or "",
+                                        "seniority": sen or "",
+                                        "hours": int(h)
+                                    })
                         
                         # Debug logging for retainer role allocation
                         if is_monthly_retainer:
-                            role_sum = sum(flo.values())
+                            role_sum = sum(a["hours"] for a in task_assignments)
                             print(f"[RETAINER DEBUG] {dcode}/{comp}/{tg}: target_task_hours={target_task_hours}, role_sum={role_sum}")
 
-                        prev_role_wbs = ""
-                        r_index = 0
-                        for (role, sen), h in flo.items():
-                            if h <= 0:
-                                continue
-                            r_index += 1
-                            if use_nested_path:
-                                row_id = ""
-                                task_code = nested_task_data.get("task_code", "") if nested_task_data else ""
-                                svc_task = svc_comp
-                            else:
-                                row_id, task_code, svc_task_v2 = DB.codes_for_component_task_role(dcode, comp, tg, role or "", sen or "", scen_col)
-                                # Prefer v3 service_department_for_task (no scen_col dependency)
-                                svc_task = DB.service_department_for_task(dcode, comp, tg) or svc_task_v2
-                            wbs_role = f"{wbs_task}.{r_index}"
+                        # Calculate total hours from all assignments for this task
+                        total_task_hours = sum(a["hours"] for a in task_assignments) if task_assignments else target_task_hours
+                        
+                        # Extract role list for backwards compatibility with RoleList/RoleStr fields
+                        role_list = [a["role"] for a in task_assignments if a["role"]]
+                        
+                        # ZERO COST: All cost comes from deliverable FixedCost
+                        # 3-LEVEL HIERARCHY: Task row (L4) is now a leaf with hours and assignments
+                        rows.append({
+                            "Row_ID": nested_task_data.get("row_id", "") if nested_task_data else "",
+                            "Deliverable_Code": dcode, 
+                            "Task_Code": nested_task_data.get("task_code", "") if nested_task_data else "",
+                            "Service_Department": svc_comp,
+                            "Deliverable": deliv_label,
+                            "Project_Name": project_name, "WBS_ID": wbs_task, "Parent_WBS_ID": wbs_comp,
+                            "Task_Name": label, "Component": comp, "Task": label,
+                            "Role": ",".join(role_list) if role_list else "",  # Comma-separated for multi-role
+                            "Seniority": "",  # Mixed seniorities handled in Assignments
+                            "Planned_Hours": total_task_hours,  # Total hours on leaf task
+                            "Start_Offset_Days": base_offset,
+                            "Duration_Days": dur,
+                            "Dependencies": (wbs_comp if (k==1 and month_idx==1) else (prev_task_last_wbs if k>1 else prev_month_last_wbs)),
+                            "Assignee_External_ID": "", "Notes": "",
+                            "Rate_USD": 0,  # Cost comes from FixedCost only
+                            "Price_USD": 0,  # Cost comes from FixedCost only
+                            "FixedCost": 0,   # No FixedCost on tasks - only on deliverable
+                            "Assignments_JSON": json.dumps(task_assignments) if task_assignments else ""  # MSP Assignment metadata
+                        })
 
-                            row_hours = int(h)
-                            
-                            # ZERO COST: All cost comes from deliverable FixedCost
-                            # Role rows only carry hours for XML Work, not cost
-                            rows.append({
-                                "Row_ID": row_id,
-                                "Deliverable_Code": dcode,
-                                "Task_Code": task_code,
-                                "Service_Department": (svc_task or svc_comp),
-                                "Deliverable": deliv_label,
-                                "Project_Name": project_name, "WBS_ID": wbs_role, "Parent_WBS_ID": wbs_task,
-                                "Task_Name": label, "Component": comp, "Task": label,
-                                "Role": role or "", "Seniority": sen or "",
-                                "Planned_Hours": row_hours,
-                                "Start_Offset_Days": "", "Duration_Days": "",
-                                "Dependencies": wbs_task if r_index == 1 else prev_role_wbs,
-                                "Assignee_External_ID": "", "Notes": "",
-                                "Rate_USD": 0,  # Cost comes from FixedCost only
-                                "Price_USD": 0,  # Cost comes from FixedCost only
-                                "FixedCost": 0   # No FixedCost on role rows - only on deliverable
-                            })
-                            prev_role_wbs = wbs_role
-
-                        prev_task_last_wbs = prev_role_wbs or wbs_task
+                        # 3-LEVEL HIERARCHY: Task is now the leaf - no role subtask rows created
+                        prev_task_last_wbs = wbs_task
 
                     prev_month_last_wbs = prev_task_last_wbs
 
@@ -4895,14 +4880,14 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             prev_deliv_wbs = wbs_deliv
 
     # ========================================================================
-    # HOURS HARMONIZATION PASS: Ensure leaf role rows sum exactly to target
+    # HOURS HARMONIZATION PASS: Ensure leaf task rows sum exactly to target
     # ========================================================================
-    # After building all rows, harmonize leaf hours per deliverable to match Step 3 target
-    # This fixes rounding drift where e.g. 200 hours target becomes 210 in leaf sum
+    # 3-LEVEL HIERARCHY: Leaf tasks are now L4 (task rows with Planned_Hours > 0)
+    # No longer looking for L5 role rows - they don't exist anymore
     
-    # Group rows by deliverable and find leaf role rows (highest outline level under each deliverable)
+    # Group rows by deliverable and find leaf task rows (L4 tasks with positive hours)
     deliverable_target_hours = {}  # dcode -> target hours from Step 3
-    deliverable_leaf_rows = {}     # dcode -> list of row indices that are leaf role rows
+    deliverable_leaf_rows = {}     # dcode -> list of row indices that are leaf task rows
     
     for d in items:
         dcode = d.get("deliverable_code") or d.get("code") or ""
@@ -4912,12 +4897,16 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             deliverable_target_hours[dcode] = target_hours
             deliverable_leaf_rows[dcode] = []
     
-    # Find leaf role rows for each deliverable (rows with Role set and Planned_Hours > 0)
+    # Find leaf task rows for each deliverable (L4 tasks with Planned_Hours > 0)
     for i, row in enumerate(rows):
         dcode = row.get("Deliverable_Code", "")
         if dcode in deliverable_target_hours:
-            # Leaf role rows have a Role assigned and positive hours
-            if row.get("Role") and row.get("Planned_Hours") and int(row.get("Planned_Hours", 0)) > 0:
+            # 3-LEVEL HIERARCHY: Leaf tasks are L4 (WBS has 3 dots: 1.1.1.1)
+            wbs = row.get("WBS_ID", "")
+            outline_level = wbs.count('.') + 1 if wbs else 0
+            is_leaf_task = outline_level == 4  # L4 = Deliverable.Component.Task
+            
+            if is_leaf_task and row.get("Planned_Hours") and int(row.get("Planned_Hours", 0)) > 0:
                 deliverable_leaf_rows[dcode].append(i)
     
     # Harmonize each deliverable's leaf hours to match target
@@ -13285,6 +13274,18 @@ def convert_excel_to_mspdi(
             if outline_level == 2 and fixed_cost > 0:
                 print(f"[XML EXPORT] 📊 Extracted FixedCost={fixed_cost} for WBS {wbs_id} (Task: {str(row.get('Task_Name', ''))[:50]})")
             
+            # 3-LEVEL HIERARCHY: Read Assignments_JSON field (L4 task assignments stored as metadata)
+            assignments_json_str = safe_str(row.get("Assignments_JSON"), "")
+            parsed_assignments = []
+            if assignments_json_str:
+                try:
+                    parsed_assignments = json.loads(assignments_json_str)
+                    if parsed_assignments:
+                        print(f"[XML EXPORT] 📋 Parsed Assignments_JSON for WBS {wbs_id}: {len(parsed_assignments)} assignments")
+                except (json.JSONDecodeError, TypeError) as e:
+                    parsed_assignments = []
+                    print(f"[XML EXPORT] ⚠️ Failed to parse Assignments_JSON for WBS {wbs_id}: {e}")
+            
             task_row = {
                 "WBS": str(row.get("WBS_ID", "")),
                 "ParentWBS": str(row.get("Parent_WBS_ID", "")),
@@ -13302,7 +13303,8 @@ def convert_excel_to_mspdi(
                 "Price_USD": price_usd,  # From scenario pricing
                 "FixedCost": fixed_cost, # Step 3 price as FixedCost (replaces hourly cost calc)
                 "Start_Date": start_date_str,  # Preserve from Gantt if available
-                "End_Date": end_date_str  # Preserve from Gantt if available
+                "End_Date": end_date_str,  # Preserve from Gantt if available
+                "Assignments_JSON": parsed_assignments  # 3-LEVEL HIERARCHY: Role assignments for L4 tasks
             }
             rows.append(task_row)
         
@@ -14128,9 +14130,17 @@ def convert_excel_to_mspdi(
                 sched["Finish"] = sched["Finish"].strftime("%Y-%m-%dT%H:%M:%S")
 
         # Create resource list (filter out nan/empty roles)
+        # 3-LEVEL HIERARCHY: Collect roles from both RoleList AND Assignments_JSON
         all_roles = set()
         for r in rows:
             all_roles.update(r["RoleList"])
+            # Also collect roles from Assignments_JSON (L4 tasks with role metadata)
+            assignments_json = r.get("Assignments_JSON", [])
+            if assignments_json and isinstance(assignments_json, list):
+                for assign in assignments_json:
+                    role = assign.get("role") or assign.get("resource_name")
+                    if role:
+                        all_roles.add(role)
         if allow_unassigned:
             all_roles.add("Unassigned")
         
@@ -15611,6 +15621,10 @@ def convert_excel_to_mspdi(
             return wbs
         
         # Build assignments for all tasks (including multi-assignment merged tasks)
+        # 3-LEVEL HIERARCHY: Priority order:
+        #   1. Assignments_JSON field (new L4 task structure) 
+        #   2. multi_assignment flag (legacy merged tasks)
+        #   3. Pre-built assignments list (legacy single-assignment)
         assign_uid_counter = 1
         for row in rows:
             task_uid = row["UID"]
@@ -15620,8 +15634,58 @@ def convert_excel_to_mspdi(
                 print(f"[XML EXPORT] 🚫 Skipping assignment for summary task UID {task_uid} (summary tasks should have no assignments)")
                 continue
             
-            # Check if this is a multi-assignment merged task
-            if row.get("multi_assignment") and "assignments" in row:
+            # =========================================================================
+            # 3-LEVEL HIERARCHY: Check for Assignments_JSON (L4 tasks with role metadata)
+            # =========================================================================
+            assignments_json = row.get("Assignments_JSON", [])
+            if assignments_json and isinstance(assignments_json, list) and len(assignments_json) > 0:
+                # L4 task with embedded assignments - create MSP Assignment for each role
+                for assign_data in assignments_json:
+                    assignment = SubElement(assignments_elem, "Assignment")
+                    SubElement(assignment, "UID").text = str(assign_uid_counter)
+                    assign_uid_counter += 1
+                    
+                    SubElement(assignment, "TaskUID").text = str(task_uid)
+                    
+                    # Find resource UID for this role
+                    resource_name = assign_data.get("role") or assign_data.get("resource_name") or "Unassigned"
+                    res_uid = res_name_to_uid.get(resource_name) or res_name_to_uid.get("Unassigned") or 1
+                    SubElement(assignment, "ResourceUID").text = str(res_uid)
+                    
+                    SubElement(assignment, "Start").text = uid_to_sched[task_uid]["Start"]
+                    SubElement(assignment, "Finish").text = uid_to_sched[task_uid]["Finish"]
+                    
+                    # Get hours from assignment data
+                    work_hours = float(assign_data.get("hours") or assign_data.get("work_hours") or 0)
+                    work_min = work_hours * 60
+                    dur_hours = uid_to_sched[task_uid].get('DurationHours', 0)
+                    dur_min = dur_hours * 60
+                    # Use actual duration for accurate Units calculation (no 480-minute rounding)
+                    units = 0 if dur_min == 0 else work_min / dur_min
+                    
+                    SubElement(assignment, "Units").text = str(units)
+                    SubElement(assignment, "Work").text = f"PT{int(work_min)}M"
+                    
+                    # BACKWARD COMPATIBILITY: Zero cost only if parent deliverable has FixedCost
+                    # Otherwise, use hourly rate calculation (legacy behavior)
+                    deliv_wbs = get_deliverable_wbs(row.get("WBS", ""))
+                    parent_fixed_cost = deliverable_fixed_costs.get(deliv_wbs, 0)
+                    if parent_fixed_cost > 0:
+                        SubElement(assignment, "Cost").text = "0.00"
+                    else:
+                        # Use rate from assignment data or lookup
+                        rate = float(assign_data.get("rate") or 0)
+                        if rate == 0:
+                            rate = _std_rate_for(resource_name, pricing_mode, rate_band, blended_rate, DB)
+                        cost = work_hours * rate
+                        SubElement(assignment, "Cost").text = f"{cost:.2f}"
+                
+                print(f"[XML EXPORT] 📋 Created {len(assignments_json)} MSP Assignments from Assignments_JSON for task: {row['Name'][:50]} (UID {task_uid})")
+            
+            # =========================================================================
+            # LEGACY: Check for multi_assignment flag (merged tasks)
+            # =========================================================================
+            elif row.get("multi_assignment") and "assignments" in row:
                 # Multi-assignment task - create multiple Assignment elements
                 for assign_data in row["assignments"]:
                     assignment = SubElement(assignments_elem, "Assignment")
@@ -15662,6 +15726,10 @@ def convert_excel_to_mspdi(
                         SubElement(assignment, "Cost").text = f"{cost:.2f}"
                     
                 print(f"[XML EXPORT] 👥 Created {len(row['assignments'])} assignments for multi-assignment task: {row['Name'][:50]} (UID {task_uid})")
+            
+            # =========================================================================
+            # LEGACY: Use pre-built assignments list
+            # =========================================================================
             else:
                 # Single-assignment task - use original logic
                 # Find the assignment for this task from the pre-built assignments list
