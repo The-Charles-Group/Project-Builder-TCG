@@ -6609,68 +6609,17 @@ def compress_deliverable_timeline(
         
         compressed_tasks.append(new_task)
     
-    # TICKET B: Extend boundary children to span the full deliverable window
-    # This is critical for Workfront: summary task duration is computed from children,
-    # so we must ensure at least one child starts on new_start and one ends on new_end
-    # This must happen AFTER the shift loop to avoid double-shifting
-    
-    # Build a map of children by deliverable_code from compressed_tasks
-    compressed_children_by_deliv: Dict[str, List[dict]] = {}
-    for task in compressed_tasks:
-        deliv_code = task.get('deliverable_code', '')
-        parent_code = task.get('parent_deliverable_code', '') or task.get('parent_code', '')
-        # A task is a child if it has a parent reference OR if it's a component/task level item
-        task_level = task.get('level', 0)
-        if task_level > 2 or (parent_code and parent_code in compression_map):
-            effective_parent = parent_code if parent_code else deliv_code
-            if effective_parent in compression_map:
-                compressed_children_by_deliv.setdefault(effective_parent, []).append(task)
-    
-    # Extend boundary children for each deliverable
-    for code, mapping in compression_map.items():
-        children = compressed_children_by_deliv.get(code, [])
-        if not children:
-            print(f"[Compress TICKET B] {code}: No children found in compressed_tasks")
-            continue
-        
-        new_start_dt = datetime.datetime.fromisoformat(mapping['new_start']).date()
-        new_end_dt = datetime.datetime.fromisoformat(mapping['new_end']).date()
-        
-        print(f"[Compress TICKET B] {code}: Aligning {len(children)} children to span {new_start_dt} -> {new_end_dt}")
-        
-        # Find valid (non-milestone) children with start/end dates
-        valid_children_with_dates = []
-        for child in children:
-            is_milestone = child.get('is_milestone', False) or child.get('name', '').lower().endswith('approval')
-            if is_milestone:
-                continue
-            child_start = child.get('start', '')
-            child_end = child.get('end', '')
-            if child_start and child_end:
-                try:
-                    start_dt = datetime.datetime.fromisoformat(child_start.replace('Z', '')).date()
-                    end_dt = datetime.datetime.fromisoformat(child_end.replace('Z', '')).date()
-                    valid_children_with_dates.append((child, start_dt, end_dt))
-                except (ValueError, AttributeError):
-                    continue
-        
-        if not valid_children_with_dates:
-            print(f"[Compress TICKET B] {code}: No valid non-milestone children found, skipping alignment")
-            continue
-        
-        # Find earliest-starting and latest-ending children
-        earliest_child, earliest_start, _ = min(valid_children_with_dates, key=lambda x: x[1])
-        latest_child, _, latest_end = max(valid_children_with_dates, key=lambda x: x[2])
-        
-        # Set earliest child's start to new_start
-        if earliest_start != new_start_dt:
-            print(f"[Compress TICKET B] Set earliest child '{earliest_child.get('name', '')[:40]}' start: {earliest_start} -> {new_start_dt}")
-            earliest_child['start'] = new_start_dt.isoformat()
-        
-        # Set latest child's end to new_end
-        if latest_end != new_end_dt:
-            print(f"[Compress TICKET B] Set latest child '{latest_child.get('name', '')[:40]}' end: {latest_end} -> {new_end_dt}")
-            latest_child['end'] = new_end_dt.isoformat()
+    # TICKET B: DISABLED - We now use bottom-up rollup via apply_effort_based_waterfall_scheduling
+    # The new scheduler computes leaf task dates from effort (hours), sequences them with waterfall
+    # dependencies, and rolls up component/deliverable dates from children - NOT the other way around.
+    # 
+    # Old behavior (stretching children to fill deliverable window) caused:
+    # - 18-day tasks with 3 hours of work
+    # - Fractional-day weirdness (1.5 days, 0.38 days)
+    # - Everything starting on day one with ASAP + no dependencies
+    #
+    # New behavior: Parents derive dates from children, not vice versa.
+    print(f"[Compress TICKET B] DISABLED - using bottom-up rollup via effort-based waterfall scheduler")
     
     metadata = {
         "compressed": True,
@@ -6686,172 +6635,240 @@ def compress_deliverable_timeline(
     return compressed_tasks, metadata
 
 
+def apply_effort_based_waterfall_scheduling(
+    tasks: List[Dict[str, Any]],
+    project_start: str = None
+) -> List[Dict[str, Any]]:
+    """
+    Apply effort-based waterfall scheduling per the FINAL SCHEDULING RULESET.
+    
+    This implements:
+    1. Task-level scheduling: duration = ceil(hours/8) business days
+    2. Waterfall sequencing per component: general → internal_review → client_review → qa
+    3. FS dependencies between phases (no overlaps)
+    4. Bottom-up rollup: deliverables/components derive dates from children
+    
+    Args:
+        tasks: List of timeline tasks with hours/effort data
+        project_start: ISO date for project start
+    
+    Returns:
+        Updated tasks with effort-based dates and FS predecessors
+    """
+    if not PHASE_WINDOW_ENABLED:
+        print(f"[EFFORT-WATERFALL] Disabled via PHASE_WINDOW_ENABLED=false")
+        return tasks
+    
+    print(f"[EFFORT-WATERFALL] Applying effort-based waterfall scheduling to {len(tasks)} tasks")
+    
+    # Phase order for waterfall sequencing
+    PHASE_ORDER = ["general", "internal_review", "client_review", "qa"]
+    
+    def classify_task_phase(task_name: str) -> str:
+        """Classify task into waterfall phase based on name."""
+        name_lower = task_name.lower()
+        if 'qa' in name_lower or 'quality' in name_lower:
+            return 'qa'
+        elif 'client' in name_lower:
+            return 'client_review'
+        elif 'internal' in name_lower:
+            return 'internal_review'
+        else:
+            return 'general'
+    
+    def get_task_hours(task: dict) -> float:
+        """Get hours from task, checking multiple fields."""
+        for key in ['hours', 'Planned_Hours', 'planned_hours', 'total_hours', 'PlannedHours']:
+            if key in task and task[key] not in (None, '', 'nan'):
+                try:
+                    return float(task[key])
+                except (TypeError, ValueError):
+                    continue
+        return 8.0  # Default: 1 day if no hours specified
+    
+    def compute_duration_days(hours: float) -> int:
+        """Compute task duration in business days: ceil(hours/8)."""
+        return max(1, math.ceil(hours / 8.0))
+    
+    # Separate tasks by level
+    deliverable_tasks = {}  # deliverable_code -> task
+    component_tasks = {}    # deliverable_code|component -> task
+    leaf_tasks = {}         # deliverable_code|component -> [tasks]
+    
+    for task in tasks:
+        level = task.get('level', 4)
+        deliverable_code = task.get('deliverable_code', '')
+        component = task.get('component', '') or task.get('Component', '')
+        
+        if level == 2:
+            # Deliverable (parent)
+            deliverable_tasks[deliverable_code] = task
+        elif level == 3:
+            # Component (parent)
+            key = f"{deliverable_code}|{component}"
+            component_tasks[key] = task
+        elif level >= 4:
+            # Leaf task
+            if not component or component.lower() == 'nan':
+                component = 'General'
+            key = f"{deliverable_code}|{component}"
+            if key not in leaf_tasks:
+                leaf_tasks[key] = []
+            leaf_tasks[key].append(task)
+    
+    print(f"[EFFORT-WATERFALL] Found {len(deliverable_tasks)} deliverables, {len(component_tasks)} components, {len(leaf_tasks)} component groups with leaf tasks")
+    
+    # Track UID assignments for predecessors
+    task_uid_counter = 1000
+    phase_last_task_uid = {}  # "deliverable|component|phase" -> last task UID in that phase
+    
+    # Process each deliverable
+    for deliv_code, deliv_task in deliverable_tasks.items():
+        # Get deliverable start from compressed timeline
+        deliv_start_str = deliv_task.get('start', '')
+        if not deliv_start_str:
+            continue
+            
+        try:
+            deliv_start = datetime.datetime.fromisoformat(deliv_start_str.replace('Z', '')).date()
+        except (ValueError, AttributeError):
+            continue
+        
+        # Find all component groups for this deliverable
+        deliv_component_keys = [k for k in leaf_tasks.keys() if k.startswith(f"{deliv_code}|")]
+        
+        if not deliv_component_keys:
+            continue
+        
+        # Track deliverable boundary for rollup
+        deliv_min_start = None
+        deliv_max_end = None
+        
+        # Process each component within this deliverable
+        component_cursor = deliv_start  # Components chain within deliverable
+        
+        for comp_key in sorted(deliv_component_keys):
+            component_name = comp_key.split('|', 1)[1] if '|' in comp_key else 'General'
+            tasks_in_component = leaf_tasks.get(comp_key, [])
+            
+            if not tasks_in_component:
+                continue
+            
+            # Classify and sort tasks by phase
+            tasks_by_phase = {phase: [] for phase in PHASE_ORDER}
+            for task in tasks_in_component:
+                task_name = task.get('name', '')
+                phase = classify_task_phase(task_name)
+                tasks_by_phase[phase].append(task)
+            
+            # Track component boundary for rollup
+            comp_min_start = None
+            comp_max_end = None
+            
+            # Waterfall: schedule each phase sequentially within component
+            phase_cursor = component_cursor
+            prev_phase_end_uid = None
+            
+            for phase in PHASE_ORDER:
+                phase_tasks = tasks_by_phase[phase]
+                if not phase_tasks:
+                    continue
+                
+                # Schedule tasks within this phase
+                # All tasks in same phase can run in parallel (same start)
+                phase_start = phase_cursor
+                phase_max_end = phase_start
+                
+                for task in phase_tasks:
+                    # Compute duration from hours
+                    hours = get_task_hours(task)
+                    duration_days = compute_duration_days(hours)
+                    
+                    # Set task dates
+                    task_start = phase_start
+                    task_end = add_business_days(task_start, duration_days - 1) if duration_days > 1 else task_start
+                    
+                    task['start'] = task_start.isoformat()
+                    task['end'] = task_end.isoformat()
+                    task['duration_days'] = duration_days
+                    task['phase_window'] = phase
+                    task['scheduling_source'] = 'effort_based'
+                    
+                    # Assign UID for predecessor tracking
+                    task_uid_counter += 1
+                    task['computed_uid'] = task_uid_counter
+                    
+                    # Add FS predecessor from previous phase (if exists)
+                    if prev_phase_end_uid:
+                        if 'predecessors' not in task:
+                            task['predecessors'] = []
+                        task['predecessors'].append({
+                            'uid': prev_phase_end_uid,
+                            'type': 'FS'  # Finish-to-Start
+                        })
+                    
+                    # Track phase end
+                    if task_end > phase_max_end:
+                        phase_max_end = task_end
+                    
+                    # Update component boundaries
+                    if comp_min_start is None or task_start < comp_min_start:
+                        comp_min_start = task_start
+                    if comp_max_end is None or task_end > comp_max_end:
+                        comp_max_end = task_end
+                
+                # Record last task in this phase for next phase's FS dependency
+                if phase_tasks:
+                    # Find the task that ends latest in this phase
+                    latest_task = max(phase_tasks, key=lambda t: datetime.datetime.fromisoformat(t.get('end', '2000-01-01')).date())
+                    prev_phase_end_uid = latest_task.get('computed_uid')
+                
+                # Next phase starts after this one ends (FS dependency)
+                phase_cursor = add_business_days(phase_max_end, 1)
+            
+            # Roll up component dates from its tasks
+            if comp_key in component_tasks and comp_min_start and comp_max_end:
+                comp_task = component_tasks[comp_key]
+                comp_task['start'] = comp_min_start.isoformat()
+                comp_task['end'] = comp_max_end.isoformat()
+                comp_task['scheduling_source'] = 'rollup_from_tasks'
+            
+            # Update deliverable boundaries
+            if comp_min_start:
+                if deliv_min_start is None or comp_min_start < deliv_min_start:
+                    deliv_min_start = comp_min_start
+            if comp_max_end:
+                if deliv_max_end is None or comp_max_end > deliv_max_end:
+                    deliv_max_end = comp_max_end
+            
+            # Next component starts after this one (optional: can run parallel)
+            # For now, components within a deliverable can run parallel
+            # If you want sequential components, set: component_cursor = add_business_days(comp_max_end, 1)
+        
+        # Roll up deliverable dates from its components/tasks
+        if deliv_min_start and deliv_max_end:
+            deliv_task['start'] = deliv_min_start.isoformat()
+            deliv_task['end'] = deliv_max_end.isoformat()
+            deliv_task['scheduling_source'] = 'rollup_from_children'
+            print(f"[EFFORT-WATERFALL] Deliverable {deliv_code}: {deliv_min_start} -> {deliv_max_end}")
+    
+    # Count scheduled tasks
+    scheduled_count = sum(1 for t in tasks if t.get('scheduling_source'))
+    print(f"[EFFORT-WATERFALL] Scheduled {scheduled_count} tasks with effort-based waterfall")
+    
+    return tasks
+
+
 def apply_phase_window_scheduling(
     tasks: List[Dict[str, Any]],
     component_windows: Dict[str, Dict[str, Any]] = None
 ) -> List[Dict[str, Any]]:
     """
-    Apply phase-window scheduling to split component windows into sequential phases.
+    DEPRECATED: Use apply_effort_based_waterfall_scheduling instead.
     
-    This eliminates "work-wait-work" gaps by tiling general, internal_review, and client_review
-    phases across each component's time window.
-    
-    Phase allocation:
-    - general: 50% of component duration (min 1 business day)
-    - internal_review: 30% of component duration (min 1 business day)
-    - client_review: 20% of component duration (min 1 business day)
-    
-    Args:
-        tasks: List of timeline tasks with start/end dates
-        component_windows: Optional pre-computed component windows
-    
-    Returns:
-        Updated tasks with phase-based scheduling
+    This wrapper calls the new effort-based scheduler for backward compatibility.
     """
-    if not PHASE_WINDOW_ENABLED:
-        print(f"[PHASE-WINDOW] Disabled via PHASE_WINDOW_ENABLED=false")
-        return tasks
-    
-    print(f"[PHASE-WINDOW] Applying phase-window scheduling to {len(tasks)} tasks")
-    
-    # Phase definitions with weights (sum to 1.0)
-    PHASE_WEIGHTS = {
-        "general": 0.50,
-        "internal_review": 0.30,
-        "client_review": 0.20
-    }
-    MIN_PHASE_DAYS = 1  # Minimum business days per phase
-    
-    # Group tasks by component
-    component_tasks: Dict[str, List[Dict[str, Any]]] = {}
-    component_windows_computed: Dict[str, Dict[str, Any]] = {}
-    
-    for task in tasks:
-        component = task.get('component', '') or task.get('Component', '')
-        if not component or component.lower() == 'nan':
-            continue
-        
-        deliverable_code = task.get('deliverable_code', '')
-        key = f"{deliverable_code}|{component}"
-        
-        if key not in component_tasks:
-            component_tasks[key] = []
-            component_windows_computed[key] = {
-                'min_start': None,
-                'max_end': None,
-                'deliverable_code': deliverable_code,
-                'component': component
-            }
-        
-        component_tasks[key].append(task)
-        
-        # Track component window
-        task_start = task.get('start', '')
-        task_end = task.get('end', '')
-        
-        if task_start and task_end:
-            try:
-                start_dt = datetime.datetime.fromisoformat(task_start.replace('Z', '')).date()
-                end_dt = datetime.datetime.fromisoformat(task_end.replace('Z', '')).date()
-                
-                window = component_windows_computed[key]
-                if window['min_start'] is None or start_dt < window['min_start']:
-                    window['min_start'] = start_dt
-                if window['max_end'] is None or end_dt > window['max_end']:
-                    window['max_end'] = end_dt
-            except (ValueError, AttributeError):
-                continue
-    
-    print(f"[PHASE-WINDOW] Found {len(component_windows_computed)} components to process")
-    
-    # Process each component
-    phase_assignments = 0
-    for key, window in component_windows_computed.items():
-        if window['min_start'] is None or window['max_end'] is None:
-            continue
-        
-        # Calculate component span in business days
-        component_biz_days = calculate_business_days_between(window['min_start'], window['max_end'])
-        
-        # FIX: Handle short components gracefully
-        # For components < 3 days, we can't split into 3 phases with 1-day minimums
-        if component_biz_days < 3:
-            # For short components, all tasks get the full component window
-            tasks_in_component = component_tasks.get(key, [])
-            for task in tasks_in_component:
-                task['start'] = window['min_start'].isoformat()
-                task['end'] = window['max_end'].isoformat()
-                task['phase_window'] = 'all'  # No phase split
-                phase_assignments += 1
-            continue
-        
-        # Allocate days to each phase using weighted distribution
-        # Ensure we don't exceed component_biz_days total
-        phase_days = {}
-        
-        # Calculate weighted days, respecting minimums
-        for phase_name, weight in PHASE_WEIGHTS.items():
-            days = max(MIN_PHASE_DAYS, int(round(component_biz_days * weight)))
-            phase_days[phase_name] = days
-        
-        # FIX: Normalize to fit exactly in component window
-        total_allocated = sum(phase_days.values())
-        
-        while total_allocated > component_biz_days:
-            # Reduce largest phase (but not below minimum)
-            reducible_phases = [p for p, d in phase_days.items() if d > MIN_PHASE_DAYS]
-            if not reducible_phases:
-                break  # Can't reduce further
-            largest_phase = max(reducible_phases, key=lambda p: phase_days[p])
-            phase_days[largest_phase] -= 1
-            total_allocated -= 1
-        
-        while total_allocated < component_biz_days:
-            # Add to general phase (largest weight)
-            phase_days["general"] += 1
-            total_allocated += 1
-        
-        # Calculate phase windows
-        phase_windows = {}
-        current_start = window['min_start']
-        
-        for phase_name in ["general", "internal_review", "client_review"]:
-            days = phase_days.get(phase_name, MIN_PHASE_DAYS)
-            phase_end = add_business_days(current_start, days - 1) if days > 1 else current_start
-            
-            phase_windows[phase_name] = {
-                'start': current_start,
-                'end': phase_end
-            }
-            
-            # Next phase starts after this one
-            current_start = add_business_days(phase_end, 1)
-        
-        # Assign tasks to their phase windows
-        tasks_in_component = component_tasks.get(key, [])
-        for task in tasks_in_component:
-            task_name = task.get('name', '').lower()
-            
-            # Determine which phase this task belongs to
-            assigned_phase = None
-            if 'client' in task_name or 'client_review' in task_name:
-                assigned_phase = 'client_review'
-            elif 'internal' in task_name or 'internal_review' in task_name:
-                assigned_phase = 'internal_review'
-            else:
-                assigned_phase = 'general'  # Default
-            
-            # Apply phase window to task
-            if assigned_phase in phase_windows:
-                phase_win = phase_windows[assigned_phase]
-                task['start'] = phase_win['start'].isoformat()
-                task['end'] = phase_win['end'].isoformat()
-                task['phase_window'] = assigned_phase
-                phase_assignments += 1
-    
-    print(f"[PHASE-WINDOW] Applied phase windows to {phase_assignments} tasks")
-    
-    return tasks
+    return apply_effort_based_waterfall_scheduling(tasks)
 
 
 # ========= AI Timeline Generation =========
@@ -16000,12 +16017,11 @@ def convert_excel_to_mspdi(
             pred_level = wbs_to_outline.get(pred_wbs, 0)
             succ_level = wbs_to_outline.get(succ_wbs, 0)
             
-            # FIX: Skip leaf-to-leaf (L4+ → L4+) dependencies entirely
-            # These cause "work-wait-work" behavior in Workfront
-            # Only Deliverable→Deliverable and Component→Component sequencing should happen
-            if pred_level >= 4 and succ_level >= 4:
-                leaf_to_leaf_dropped += 1
-                continue
+            # NOTE: Leaf-to-leaf (L4+ → L4+) dependencies are now ALLOWED for intra-component waterfall
+            # The effort-based scheduler creates FS dependencies between phases:
+            # general → internal_review → client_review → qa
+            # These dependencies are critical for clean waterfall behavior in Workfront
+            # The old filter was causing ASAP chaos - now we let the scheduler's FS deps through
             
             # Only filter if BOTH tasks are L3+ (OutlineLevel >= 3)
             if pred_level >= 3 and succ_level >= 3:
@@ -16077,6 +16093,107 @@ def convert_excel_to_mspdi(
         
         if skipped_zero_duration > 0:
             print(f"[VALIDATION] ⏭️  Skipped {skipped_zero_duration} PredecessorLink(s) with zero-duration tasks")
+
+        # ═══════════════════════════════════════════════════════════════════════════
+        # EFFORT-BASED WATERFALL: Build intra-component FS dependencies between phases
+        # This creates general → internal_review → client_review → qa sequencing
+        # ═══════════════════════════════════════════════════════════════════════════
+        if PHASE_WINDOW_ENABLED:
+            print(f"\n[EFFORT WATERFALL] Building intra-component phase FS links...")
+            
+            # Phase order for waterfall
+            PHASE_ORDER = ["general", "internal_review", "client_review", "qa"]
+            
+            # Group L4 tasks by component key (deliverable|component)
+            component_phase_tasks: Dict[str, Dict[str, List]] = {}  # comp_key -> phase -> [task_elems]
+            
+            for task_elem in tasks_elem.findall("Task"):
+                outline_elem = task_elem.find("OutlineLevel")
+                uid_elem = task_elem.find("UID")
+                name_elem = task_elem.find("Name")
+                wbs_elem = task_elem.find("WBS")
+                finish_elem = task_elem.find("Finish")
+                
+                if not all([outline_elem, uid_elem, name_elem, wbs_elem, finish_elem]):
+                    continue
+                
+                outline_level = int(outline_elem.text)
+                
+                # Only process L4+ leaf tasks
+                if outline_level < 4:
+                    continue
+                
+                task_name = name_elem.text or ""
+                wbs = wbs_elem.text or ""
+                uid = int(uid_elem.text)
+                finish_str = finish_elem.text or ""
+                
+                # Determine component key from WBS (first 3 segments: 1.X.Y)
+                wbs_parts = wbs.split(".")
+                if len(wbs_parts) < 3:
+                    continue
+                comp_key = ".".join(wbs_parts[:3])  # e.g., "1.2.3"
+                
+                # Classify task into phase
+                name_lower = task_name.lower()
+                if 'qa' in name_lower or 'quality' in name_lower:
+                    phase = 'qa'
+                elif 'client' in name_lower:
+                    phase = 'client_review'
+                elif 'internal' in name_lower:
+                    phase = 'internal_review'
+                else:
+                    phase = 'general'
+                
+                if comp_key not in component_phase_tasks:
+                    component_phase_tasks[comp_key] = {p: [] for p in PHASE_ORDER}
+                
+                component_phase_tasks[comp_key][phase].append({
+                    'elem': task_elem,
+                    'uid': uid,
+                    'finish': finish_str,
+                    'name': task_name
+                })
+            
+            # Build FS links between phases
+            waterfall_links_added = 0
+            for comp_key, phases in component_phase_tasks.items():
+                prev_phase_last_uid = None
+                
+                for phase in PHASE_ORDER:
+                    phase_tasks = phases.get(phase, [])
+                    if not phase_tasks:
+                        continue
+                    
+                    # Add FS predecessor to each task in this phase from previous phase's last task
+                    if prev_phase_last_uid is not None:
+                        for task_info in phase_tasks:
+                            task_elem = task_info['elem']
+                            
+                            # Check if this predecessor already exists
+                            already_has_pred = False
+                            for existing_pred in task_elem.findall("PredecessorLink"):
+                                pred_uid_elem = existing_pred.find("PredecessorUID")
+                                if pred_uid_elem is not None and pred_uid_elem.text == str(prev_phase_last_uid):
+                                    already_has_pred = True
+                                    break
+                            
+                            if not already_has_pred:
+                                pred_link = SubElement(task_elem, "PredecessorLink")
+                                SubElement(pred_link, "PredecessorUID").text = str(prev_phase_last_uid)
+                                SubElement(pred_link, "Type").text = "1"  # Finish-to-Start
+                                SubElement(pred_link, "CrossProject").text = "0"
+                                SubElement(pred_link, "LinkLag").text = "0"
+                                SubElement(pred_link, "LagFormat").text = "7"
+                                waterfall_links_added += 1
+                    
+                    # Find the last-finishing task in this phase (to be predecessor for next phase)
+                    if phase_tasks:
+                        # Sort by finish date to find the last one
+                        sorted_tasks = sorted(phase_tasks, key=lambda t: t['finish'], reverse=True)
+                        prev_phase_last_uid = sorted_tasks[0]['uid']
+            
+            print(f"[EFFORT WATERFALL] Added {waterfall_links_added} intra-component phase FS links across {len(component_phase_tasks)} components")
 
         # ═══════════════════════════════════════════════════════════════════════════
         # TIGHT WATERFALL: Build L2-only Finish-to-Start chain between deliverables

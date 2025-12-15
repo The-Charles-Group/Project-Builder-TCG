@@ -1,0 +1,136 @@
+What still needs to be fixed (this is now purely scheduling)
+
+Below is the exact instruction set to give Replit (agent + architect).
+This applies to the entire project, not just Brand Positioning.
+
+🔧 FINAL SCHEDULING RULESET (copy/paste to Replit)
+1. The app must schedule at task level
+
+For every exported leaf task, the app must compute:
+
+task.start_date
+
+task.end_date
+
+based on:
+
+task effort
+
+ordering rules (see below)
+
+working calendar (Mon–Fri)
+
+Deliverables and components must roll up from tasks — not the other way around.
+
+2. Enforce a simple waterfall template per component
+
+For each component, tasks must be sequenced like this:
+
+general → internal_review → client_review → qa
+
+
+Implementation:
+
+Create FS dependencies:
+
+internal_review FS general
+
+client_review FS internal_review
+
+qa FS client_review
+
+No overlaps unless explicitly intended
+
+This alone will clean up 80% of the Gantt mess.
+
+3. Leaf task duration must equal its own span
+
+For every leaf task:
+
+duration_minutes = business_days(start, finish) * 480
+
+
+❌ DO NOT:
+
+set leaf tasks to the deliverable’s full window
+
+derive duration from hours alone (ceil(hours/8))
+
+This is why you were seeing:
+
+1.5 days
+
+0.38 days
+
+18‑day tasks with 3 hours of work
+
+4. Deliverables & components must be TRUE summaries
+
+Rules:
+
+If a task has children:
+
+Summary = 1
+
+Work = 0
+
+No assignments
+
+Only leaf tasks:
+
+get Work
+
+get Assignments
+
+Workfront will roll up correctly once this is consistent.
+
+5. Kill “everything starts on day one”
+
+Set constraints like this:
+
+Deliverables:
+
+Start No Earlier Than (their computed start)
+
+Components:
+
+no constraint
+
+Leaf tasks:
+
+no constraint
+
+rely on FS dependencies instead
+
+Right now, ASAP + no dependencies = chaos.
+
+6. Keep assignments exactly as they are now
+
+What you have now is correct:
+
+Roles live in Assignments
+
+Task names are clean
+
+Assignment Breakdown works
+
+Do not go back to role‑named tasks.
+
+What the “good” end state looks like
+
+After this change:
+
+App Gantt (weekly/monthly)
+↔ matches ↔
+
+Workfront Gantt
+
+You will see:
+
+Clean waterfall per deliverable
+
+No fractional‑day weirdness except where genuinely small tasks exist
+
+Deliverable durations match the app’s working duration
+
+Workfront rollups are predictable
