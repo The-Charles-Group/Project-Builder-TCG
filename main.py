@@ -43,6 +43,7 @@ import pickle
 # ============================================================
 ENABLE_WBS_DEPENDENCIES = True  # Use WBS Dependencies column instead of scheduler edges
 ENABLE_MULTI_ASSIGNMENT = True  # Group roles into multi-assignment tasks
+STRIP_ASSIGNMENTS_FOR_WF = False  # When True, removes Resources/Assignments from XML (legacy Workfront behavior)
 # ROLLBACK: Set both to False to restore legacy behavior (scheduler edges, one task per role)
 
 # ============================================================
@@ -15008,13 +15009,11 @@ def convert_excel_to_mspdi(
         skipped_components = 0
         task_id_counter = 0
         for r in rows:
-            # Calculate outline level for depth filtering
+            # Calculate outline level for hierarchy
             outline_level = r["WBS"].count(".") + 1  # 1 for '1', 2 for '1.1', etc.
             
-            # CRITICAL: Skip components (OutlineLevel > 3) per Workfront requirements
-            if outline_level > 3:
-                skipped_components += 1
-                continue
+            # RESTORED: Export all levels (L1=Project, L2=Deliverable, L3=Component, L4+=Tasks)
+            # Previously capped at OutlineLevel 3, now exporting full 4-level hierarchy
             
             task_id_counter += 1
             task = SubElement(tasks_elem, "Task")
@@ -16287,9 +16286,8 @@ def convert_excel_to_mspdi(
         except Exception as e:
             print(f"[MSPDI Validation] Could not validate dates: {e}")
 
-        # Log skipped components
-        if skipped_components > 0:
-            print(f"[WORKFRONT] 🚫 Skipped {skipped_components} components (OutlineLevel > 3) per depth limit")
+        # Log hierarchy info (no longer skipping any levels)
+        print(f"[WORKFRONT] ✅ Exported full 4-level hierarchy (Project/Deliverable/Component/Task)")
         
         # ═══════════════════════════════════════════════════════════════════════════
         # WORKFRONT CLEANUP: Strip problematic elements for clean import
@@ -16297,24 +16295,29 @@ def convert_excel_to_mspdi(
         # Snap times to 09:00/17:00, No constraints on summary tasks
         # CRITICAL: Always run cleanup for Workfront compatibility (not conditional)
         # ═══════════════════════════════════════════════════════════════════════════
-        if True:  # Always run Workfront cleanup
+        if True:  # Always run Workfront cleanup (selective based on flags)
             print(f"\n[WORKFRONT CLEANUP] Applying cleanup rules for Workfront import...")
             cleanup_stats = {"resources_removed": 0, "assignments_removed": 0, "fixedcost_removed": 0, 
                             "times_snapped": 0, "summary_constraints_removed": 0}
             
-            # 1. Remove <Resources> element entirely
-            resources_elem_to_remove = project.find("Resources")
-            if resources_elem_to_remove is not None:
-                project.remove(resources_elem_to_remove)
-                cleanup_stats["resources_removed"] = 1
-                print(f"[WORKFRONT CLEANUP] 🗑️ Removed <Resources> element")
-            
-            # 2. Remove <Assignments> element entirely
-            assignments_elem_to_remove = project.find("Assignments")
-            if assignments_elem_to_remove is not None:
-                project.remove(assignments_elem_to_remove)
-                cleanup_stats["assignments_removed"] = 1
-                print(f"[WORKFRONT CLEANUP] 🗑️ Removed <Assignments> element")
+            # 1. GATED: Only remove Resources/Assignments if STRIP_ASSIGNMENTS_FOR_WF is True
+            # By default (False), keep Resources and Assignments for Workfront assignment breakdowns
+            if STRIP_ASSIGNMENTS_FOR_WF:
+                # Remove <Resources> element entirely
+                resources_elem_to_remove = project.find("Resources")
+                if resources_elem_to_remove is not None:
+                    project.remove(resources_elem_to_remove)
+                    cleanup_stats["resources_removed"] = 1
+                    print(f"[WORKFRONT CLEANUP] 🗑️ Removed <Resources> element (STRIP_ASSIGNMENTS_FOR_WF=True)")
+                
+                # Remove <Assignments> element entirely
+                assignments_elem_to_remove = project.find("Assignments")
+                if assignments_elem_to_remove is not None:
+                    project.remove(assignments_elem_to_remove)
+                    cleanup_stats["assignments_removed"] = 1
+                    print(f"[WORKFRONT CLEANUP] 🗑️ Removed <Assignments> element (STRIP_ASSIGNMENTS_FOR_WF=True)")
+            else:
+                print(f"[WORKFRONT CLEANUP] ✅ Kept <Resources> and <Assignments> (STRIP_ASSIGNMENTS_FOR_WF=False)")
             
             # 3. Remove FixedCost and CostType from all tasks
             for task_elem in tasks_elem.findall("Task"):
@@ -16442,7 +16445,86 @@ def convert_excel_to_mspdi(
         
         # Validation 3: Verify exported task count
         exported_task_count = len(tasks_elem.findall("Task"))
-        print(f"[VALIDATION] 📊 Exported {exported_task_count} tasks (skipped {skipped_components} components)")
+        print(f"[VALIDATION] 📊 Exported {exported_task_count} tasks")
+        
+        # Validation 4: Check Max OutlineLevel >= 4 (full 4-level hierarchy)
+        # Count by WBS depth (more reliable than OutlineLevel element which may be capped)
+        max_wbs_depth = 0
+        for task_elem in tasks_elem.findall("Task"):
+            wbs_elem = task_elem.find("WBS")
+            if wbs_elem is not None and wbs_elem.text:
+                wbs_text = wbs_elem.text
+                # Skip anchor tasks (ANCHOR_ prefix) - they don't count for hierarchy depth
+                if wbs_text.startswith("ANCHOR_") or ".START" in wbs_text or ".END" in wbs_text:
+                    continue
+                # Count dots + 1 = depth (e.g., "1.2.3.4" = 4 dots = depth 4)
+                depth = wbs_text.count(".") + 1
+                max_wbs_depth = max(max_wbs_depth, depth)
+        
+        if max_wbs_depth >= 4:
+            print(f"[VALIDATION] ✅ Max hierarchy depth (WBS): {max_wbs_depth} (≥4 required): PASS")
+        else:
+            validation_errors.append(f"Max hierarchy depth is {max_wbs_depth}, expected ≥4 for full hierarchy")
+            print(f"[VALIDATION] ⚠️ Max hierarchy depth: {max_wbs_depth} (expected ≥4 for Deliverable/Component/Task hierarchy)")
+        
+        # Validation 5: Check Resources count > 0 (if not stripped)
+        resources_elem_check = project.find("Resources")
+        resource_count = len(resources_elem_check.findall("Resource")) if resources_elem_check is not None else 0
+        if STRIP_ASSIGNMENTS_FOR_WF:
+            print(f"[VALIDATION] ℹ️ Resources count: N/A (STRIP_ASSIGNMENTS_FOR_WF=True)")
+        elif resource_count > 0:
+            print(f"[VALIDATION] ✅ Resources count: {resource_count} (PASS)")
+        else:
+            validation_errors.append("No Resources found - assignment breakdowns won't work")
+            print(f"[VALIDATION] ⚠️ Resources count: 0 (WARNING - no role assignments)")
+        
+        # Validation 6: Check Assignments count > 0 (if not stripped)
+        assignments_elem_check = project.find("Assignments")
+        assignment_count = len(assignments_elem_check.findall("Assignment")) if assignments_elem_check is not None else 0
+        if STRIP_ASSIGNMENTS_FOR_WF:
+            print(f"[VALIDATION] ℹ️ Assignments count: N/A (STRIP_ASSIGNMENTS_FOR_WF=True)")
+        elif assignment_count > 0:
+            print(f"[VALIDATION] ✅ Assignments count: {assignment_count} (PASS)")
+        else:
+            validation_errors.append("No Assignments found - assignment breakdowns won't work")
+            print(f"[VALIDATION] ⚠️ Assignments count: 0 (WARNING - no task assignments)")
+        
+        # Validation 7: No Assignments for summary tasks
+        if assignments_elem_check is not None:
+            summary_assignment_errors = []
+            for assignment_elem in assignments_elem_check.findall("Assignment"):
+                task_uid_elem = assignment_elem.find("TaskUID")
+                if task_uid_elem is not None and task_uid_elem.text:
+                    task_uid = int(task_uid_elem.text)
+                    if task_uid in summary_task_uids:
+                        summary_assignment_errors.append(task_uid)
+            
+            if not summary_assignment_errors:
+                print(f"[VALIDATION] ✅ No assignments on summary tasks: PASS")
+            else:
+                validation_errors.append(f"Found {len(summary_assignment_errors)} assignments on summary tasks")
+                print(f"[VALIDATION] ⚠️ Found {len(summary_assignment_errors)} assignments on summary tasks (should be 0)")
+        
+        # Validation 8: Every PredecessorUID exists in Tasks
+        all_task_uids = set()
+        for task_elem in tasks_elem.findall("Task"):
+            uid_elem = task_elem.find("UID")
+            if uid_elem is not None and uid_elem.text:
+                all_task_uids.add(uid_elem.text)
+        
+        missing_pred_uids = []
+        for task_elem in tasks_elem.findall("Task"):
+            for pred_link in task_elem.findall("PredecessorLink"):
+                pred_uid_elem = pred_link.find("PredecessorUID")
+                if pred_uid_elem is not None and pred_uid_elem.text:
+                    if pred_uid_elem.text not in all_task_uids:
+                        missing_pred_uids.append(pred_uid_elem.text)
+        
+        if not missing_pred_uids:
+            print(f"[VALIDATION] ✅ All PredecessorUIDs exist in Tasks: PASS")
+        else:
+            validation_errors.append(f"Found {len(missing_pred_uids)} PredecessorUIDs referencing non-existent tasks")
+            print(f"[VALIDATION] ⚠️ Found {len(missing_pred_uids)} PredecessorUIDs referencing non-existent tasks: {missing_pred_uids[:5]}")
         
         if validation_errors:
             print(f"[VALIDATION] ⚠️ {len(validation_errors)} validation warning(s) detected")

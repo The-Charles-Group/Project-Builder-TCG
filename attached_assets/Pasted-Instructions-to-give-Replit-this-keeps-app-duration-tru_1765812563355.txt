@@ -1,0 +1,89 @@
+Instructions to give Replit (this keeps app duration truth + restores assignments/components)
+A) Keep deliverable duration alignment (mandatory)
+
+For every deliverable:
+
+Create Start anchor + End anchor milestones (leaf tasks)
+
+Apply constraints:
+
+Start anchor: Must Start On
+
+End anchor: Must Finish On
+
+Make sure they are children of the deliverable (not the project root)
+
+B) Restore hierarchy without losing rollup
+
+Hierarchy must be:
+
+Project Summary (L1 summary)
+
+Deliverable (L2 summary)
+
+Component (L3 summary)
+
+Task (L4 leaf)
+
+Anchors can live either:
+
+directly under Deliverable, or
+
+under a Component called “Governance / Reviews”
+Either way, they must remain leaf tasks.
+
+C) Restore assignments without breaking import
+
+Reintroduce roles only first:
+
+<Resources>: one per role (Designer, Strategist, PM, etc.)
+
+<Assignments>: link TaskUID → ResourceUID for leaf tasks only
+
+Do not assign summary tasks
+
+D) Remove the “work–wait–work” look without shortening duration
+
+That look happens when tasks span long durations but have small work. Fix it by:
+
+Make tasks tight + add explicit waits
+
+“Work” tasks:
+
+duration = ceil(work_hours / 8) business days
+
+assigned to roles
+
+“Review / Wait” tasks:
+
+duration = X business days
+
+0 work
+
+no assignments
+
+This keeps the deliverable span intact (anchors enforce it) but removes mysterious gaps.
+
+What you should expect after this
+
+Workfront deliverable rows match app:
+
+same Start
+
+same Due
+
+same business-day duration (±1 depending on inclusive counting)
+
+Components show correctly
+
+Assignment Breakdown is populated
+
+Timeline reads cleanly (no unexplained dead zones)
+
+Copy/paste summary for Replit
+
+Do NOT sacrifice duration matching to restore assignments/components.
+Add Start/End anchor milestones per deliverable to force rollup span.
+Then restore component level + dependencies.
+Then add role-based Resources/Assignments for leaf tasks only.
+Finally remove “work–wait–work” by tightening work tasks to effort days and inserting explicit “Client Review / Waiting” tasks with 0 work.
