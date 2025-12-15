@@ -1431,19 +1431,36 @@ async function initializeGanttChart(tasks = []) {
         const start = new Date(task._start);
         const end = new Date(task._end);
         const calendarDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
-        const hours = task.hours || 0;
-        const effortDays = Math.ceil(hours / 8);
-        const workingDuration = task.timeline_working_duration_days || null;
+        
+        // DUAL METRICS: Use API-provided effort_hours and duration_days if available
+        const effortHours = task.effort_hours || task.hours || 0;
+        // Handle milestones (0 duration) and regular tasks
+        const isMilestone = task.is_milestone || task.duration_days === 0;
+        const durationDays = isMilestone ? 0 : (task.duration_days || task.timeline_working_duration_days || Math.ceil(effortHours / 8) || 1);
         
         return `
-          <div class="gantt-popup" style="padding:12px;">
-            <h5 style="margin:0 0 8px;">${task.name}</h5>
+          <div class="gantt-popup" style="padding:12px; min-width: 280px;">
+            <h5 style="margin:0 0 12px; border-bottom: 1px solid #444; padding-bottom: 8px;">${task.name}</h5>
             <p style="margin:4px 0;"><strong>Department:</strong> ${task.department || 'N/A'}</p>
-            <p style="margin:4px 0;"><strong>Hours:</strong> ${hours} (pricing effort)</p>
-            <p style="margin:4px 0;"><strong>Span:</strong> ${calendarDays} calendar days (${task.start} – ${task.end})</p>
-            <p style="margin:4px 0;color:#888;font-size:0.9em;" title="Raw hours ÷ 8, ignoring schedule and weekends">Effort days @ 8h/d ≈ ${effortDays} days</p>
-            ${workingDuration ? `<p style="margin:4px 0;color:#22c55e;font-weight:600;" title="Number of working days (Mon–Fri, 8h/day) that Workfront uses for 'Duration'"><strong>Working duration (Mon–Fri):</strong> ${workingDuration} days</p>` : ''}
-            ${task.critical_path ? '<p style="margin:4px 0;color:#fbbf24;"><strong>⚡ Critical Path</strong></p>' : ''}
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 6px;">
+              <div style="text-align: center; padding: 8px; background: rgba(59, 130, 246, 0.2); border-radius: 4px;">
+                <div style="font-size: 1.5em; font-weight: bold; color: #60a5fa;">${effortHours}h</div>
+                <div style="font-size: 0.85em; color: #94a3b8;">Effort (Work)</div>
+              </div>
+              <div style="text-align: center; padding: 8px; background: ${isMilestone ? 'rgba(251, 191, 36, 0.2)' : 'rgba(34, 197, 94, 0.2)'}; border-radius: 4px;">
+                <div style="font-size: 1.5em; font-weight: bold; color: ${isMilestone ? '#fbbf24' : '#22c55e'};">${isMilestone ? 'Milestone' : durationDays + 'd'}</div>
+                <div style="font-size: 0.85em; color: #94a3b8;">${isMilestone ? '(0 duration)' : 'Duration'}</div>
+              </div>
+            </div>
+            
+            <p style="margin:8px 0 4px; font-size: 0.85em; color: #888;">
+              ${task.start} to ${task.end} (${calendarDays} calendar days)
+            </p>
+            <p style="margin:0; font-size: 0.75em; color: #666; font-style: italic;">
+              Effort = planned hours | Duration = business days (Mon-Fri)
+            </p>
+            ${task.critical_path ? '<p style="margin:8px 0 0;color:#fbbf24;"><strong>⚡ Critical Path</strong></p>' : ''}
           </div>
         `;
       },
@@ -1559,17 +1576,14 @@ async function initializeGanttChart(tasks = []) {
             taskElement.classList.add('critical-path');
           }
           
-          // FEATURE: Add hover tooltip showing hours, span, effort days, and working duration
+          // FEATURE: Add hover tooltip showing dual metrics - Effort (hours) and Duration (days)
           const taskData = tasks.find(t => t.id === task.id);
           if (taskData) {
             const calendarDays = calculateDuration(taskData.start, taskData.end);
-            const hours = taskData.hours || 0;
-            const effortDays = Math.ceil(hours / 8);
-            const workingDuration = taskData.timeline_working_duration_days;
-            let tooltipText = `${taskData.name} | Hours: ${hours} (effort) | Span: ${calendarDays} days (${taskData.start} – ${taskData.end}) | Effort: ~${effortDays} days @ 8h/d`;
-            if (workingDuration) {
-              tooltipText += ` | Working duration (Mon-Fri): ${workingDuration} days`;
-            }
+            // DUAL METRICS: Use API-provided effort_hours and duration_days if available
+            const effortHours = taskData.effort_hours || taskData.hours || 0;
+            const durationDays = taskData.duration_days || taskData.timeline_working_duration_days || Math.ceil(effortHours / 8) || 1;
+            let tooltipText = `${taskData.name} | Effort: ${effortHours}h | Duration: ${durationDays} business days | ${taskData.start} to ${taskData.end}`;
             
             // Try to add tooltip to both the bar and its wrapper
             taskElement.setAttribute('title', tooltipText);

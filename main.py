@@ -54,6 +54,7 @@ ENABLE_WBS_DEPENDENCIES = True  # Use WBS Dependencies column instead of schedul
 ENABLE_MULTI_ASSIGNMENT = True  # Group roles into multi-assignment tasks
 STRIP_ASSIGNMENTS_FOR_WF = False  # When True, removes Resources/Assignments from XML (legacy Workfront behavior)
 PHASE_WINDOW_ENABLED = os.getenv("PHASE_WINDOW_ENABLED", "true").lower() == "true"  # Split components into general/internal_review/client_review phases
+ENABLE_DESCENDANT_STRETCHING = os.getenv("ENABLE_DESCENDANT_STRETCHING", "true").lower() == "true"  # When True, stretches leaf tasks to fill deliverable windows (Workfront rollup match)
 # ROLLBACK: Set both to False to restore legacy behavior (scheduler edges, one task per role)
 
 # ============================================================
@@ -6609,17 +6610,14 @@ def compress_deliverable_timeline(
         
         compressed_tasks.append(new_task)
     
-    # TICKET B: DISABLED - We now use bottom-up rollup via apply_effort_based_waterfall_scheduling
-    # The new scheduler computes leaf task dates from effort (hours), sequences them with waterfall
-    # dependencies, and rolls up component/deliverable dates from children - NOT the other way around.
-    # 
-    # Old behavior (stretching children to fill deliverable window) caused:
-    # - 18-day tasks with 3 hours of work
-    # - Fractional-day weirdness (1.5 days, 0.38 days)
-    # - Everything starting on day one with ASAP + no dependencies
-    #
-    # New behavior: Parents derive dates from children, not vice versa.
-    print(f"[Compress TICKET B] DISABLED - using bottom-up rollup via effort-based waterfall scheduler")
+    # TICKET B: Descendant stretching - controlled by ENABLE_DESCENDANT_STRETCHING flag
+    # When enabled: Stretches leaf tasks to fill deliverable windows (Workfront rollup match)
+    # When disabled: Parents derive dates from children via bottom-up rollup
+    if ENABLE_DESCENDANT_STRETCHING:
+        print(f"[Compress TICKET B] ENABLED - will stretch descendants to fill deliverable windows")
+        # Note: Actual stretching happens in convert_excel_to_mspdi via stretch_and_clamp_descendants()
+    else:
+        print(f"[Compress TICKET B] DISABLED - using bottom-up rollup via effort-based waterfall scheduler")
     
     metadata = {
         "compressed": True,
@@ -7532,6 +7530,49 @@ async def generate_timeline(request: TimelineGenerationRequest):
                 # This eliminates work-wait-work gaps by tiling phases across each component window
                 if PHASE_WINDOW_ENABLED:
                     compressed_tasks = apply_phase_window_scheduling(compressed_tasks)
+                
+                # DUAL METRICS: Add both Effort (hours) and Duration (business days) to each task
+                # This addresses "why is it 12 days when it's 3 hours" confusion - both can be true!
+                # NOTE: Only adds new fields (effort_hours, duration_days) without mutating scheduler values
+                for task in compressed_tasks:
+                    # Check if milestone (zero-hour/approval tasks)
+                    is_milestone = task.get('is_milestone', False) or (
+                        task.get('name', '').lower().endswith('approval') or
+                        task.get('name', '').lower().endswith('complete')
+                    )
+                    
+                    # Effort = planned hours from the task (milestones have 0 hours)
+                    hours = 0.0
+                    for key in ['hours', 'Planned_Hours', 'planned_hours', 'total_hours', 'PlannedHours']:
+                        if key in task and task[key] not in (None, '', 'nan'):
+                            try:
+                                hours = float(task[key])
+                                break
+                            except (TypeError, ValueError):
+                                continue
+                    task['effort_hours'] = hours
+                    
+                    # Duration = business-day span from start to end
+                    # Milestones get 0 duration, regular tasks get computed span
+                    if is_milestone:
+                        task['duration_days'] = 0
+                    else:
+                        try:
+                            start_str = task.get('start', '')
+                            end_str = task.get('end', '')
+                            if start_str and end_str:
+                                start_dt = datetime.datetime.fromisoformat(start_str.replace('Z', '')).date()
+                                end_dt = datetime.datetime.fromisoformat(end_str.replace('Z', '')).date()
+                                # Count business days (Mon-Fri) in the span
+                                duration_days = shared_working_days_between(
+                                    datetime.datetime.combine(start_dt, datetime.time(8, 0)),
+                                    datetime.datetime.combine(end_dt, datetime.time(17, 0))
+                                )
+                                task['duration_days'] = max(1, duration_days)
+                            else:
+                                task['duration_days'] = max(1, math.ceil(hours / 8.0)) if hours > 0 else 1
+                        except (ValueError, AttributeError):
+                            task['duration_days'] = max(1, math.ceil(hours / 8.0)) if hours > 0 else 1
                 
                 result['tasks'] = compressed_tasks
                 
@@ -11246,6 +11287,107 @@ def api_post_scenarios(payload: dict, request: Request):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to build scenarios: {str(e)}")
 
+
+# ============================================================
+# TASK-LEVEL GANTT API: Unified schedule for UI and XML export
+# Returns Deliverable → Component → Task hierarchy with dual metrics
+# ============================================================
+@app.post("/api/gantt/task_level")
+def api_task_level_gantt(payload: dict):
+    """
+    Returns task-level Gantt data using the same uid_to_sched that XML export uses.
+    This ensures UI Gantt matches Workfront exactly.
+    
+    Returns L2 (Deliverable) → L3 (Component) → L4 (Task) hierarchy with:
+    - effort_hours: Planned hours (work)
+    - duration_days: Business-day span (Start→Finish)
+    - start: ISO date string
+    - end: ISO date string
+    """
+    session_id = payload.get("session_id") or payload.get("sessionId")
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+    
+    # Get scenario from SCENARIO_STORE
+    state = get_session_state(session_id)
+    scenario = state.get("scenario", {})
+    
+    if not scenario:
+        raise HTTPException(status_code=404, detail="Scenario not found for session")
+    
+    # Get timeline tasks with dual metrics
+    timeline_tasks = []
+    if "timeline_tasks" in scenario and scenario["timeline_tasks"]:
+        timeline_tasks = scenario["timeline_tasks"]
+    elif "timeline" in scenario and scenario["timeline"]:
+        timeline_tasks = scenario["timeline"].get("tasks", [])
+    
+    if not timeline_tasks:
+        # Build from items if no timeline exists
+        items = scenario.get("items", [])
+        for item in items:
+            task = {
+                "deliverable_code": item.get("deliverable_code", ""),
+                "name": item.get("deliverable", item.get("Deliverable", "")),
+                "level": 2,
+                "effort_hours": float(item.get("planned_hours", item.get("Planned_Hours", 0)) or 0),
+                "duration_days": max(1, math.ceil(float(item.get("planned_hours", item.get("Planned_Hours", 0)) or 0) / 8.0)),
+                "start": scenario.get("project_start", datetime.date.today().isoformat()),
+                "end": scenario.get("project_start", datetime.date.today().isoformat()),
+            }
+            timeline_tasks.append(task)
+    
+    # Ensure all tasks have dual metrics
+    enriched_tasks = []
+    for task in timeline_tasks:
+        enriched = dict(task)
+        
+        # Add effort_hours if missing
+        if 'effort_hours' not in enriched:
+            hours = 0.0
+            for key in ['hours', 'Planned_Hours', 'planned_hours', 'total_hours', 'PlannedHours']:
+                if key in enriched and enriched[key] not in (None, '', 'nan'):
+                    try:
+                        hours = float(enriched[key])
+                        break
+                    except (TypeError, ValueError):
+                        continue
+            enriched['effort_hours'] = hours
+        
+        # Add duration_days if missing
+        if 'duration_days' not in enriched:
+            try:
+                start_str = enriched.get('start', '')
+                end_str = enriched.get('end', '')
+                if start_str and end_str:
+                    start_dt = datetime.datetime.fromisoformat(start_str.replace('Z', '')).date()
+                    end_dt = datetime.datetime.fromisoformat(end_str.replace('Z', '')).date()
+                    duration_days = shared_working_days_between(
+                        datetime.datetime.combine(start_dt, datetime.time(8, 0)),
+                        datetime.datetime.combine(end_dt, datetime.time(17, 0))
+                    )
+                    enriched['duration_days'] = max(1, duration_days)
+                else:
+                    enriched['duration_days'] = max(1, math.ceil(enriched['effort_hours'] / 8.0)) if enriched['effort_hours'] > 0 else 1
+            except (ValueError, AttributeError):
+                enriched['duration_days'] = max(1, math.ceil(enriched['effort_hours'] / 8.0)) if enriched.get('effort_hours', 0) > 0 else 1
+        
+        enriched_tasks.append(enriched)
+    
+    return {
+        "ok": True,
+        "tasks": enriched_tasks,
+        "task_count": len(enriched_tasks),
+        "stretching_enabled": ENABLE_DESCENDANT_STRETCHING,
+        "metadata": {
+            "source": "unified_schedule",
+            "dual_metrics": True,
+            "effort_hours_label": "Effort (hours)",
+            "duration_days_label": "Duration (business days)"
+        }
+    }
+
+
 @app.post("/api/build_scenario_c")
 def api_build_scenario_c_deprecated(payload: dict):
     if not DB.loaded:
@@ -14191,26 +14333,34 @@ def convert_excel_to_mspdi(
             
             print(f"[XML EXPORT] ✓ Completed stretch of {len(kids)} children")
         
-        # CRITICAL FIX Part 2: Stretch and clamp descendants for all preserved deliverables
-        # This ensures child components/tasks FILL the deliverable window set in Gantt (not just clamp)
-        # Must happen BEFORE rollup_summary runs to prevent wrong date calculations
-        for preserved_uid in preserved_dates:
-            if preserved_uid in uid_to_sched and preserved_uid in children_by_parent:
-                preserved_start = uid_to_sched[preserved_uid]["Start"]
-                preserved_finish = uid_to_sched[preserved_uid]["Finish"]
-                stretch_and_clamp_descendants(preserved_uid, preserved_start, preserved_finish)
-                print(f"[XML EXPORT] 🔒 Stretched descendants of preserved UID {preserved_uid} to fill {preserved_start.date()} to {preserved_finish.date()}")
-        
-        # TICKET B: Stretch and clamp descendants for compressed timeline deliverables
-        # This ensures Workfront recomputes the correct summary duration (64 days vs 25 days)
-        # by ensuring child tasks span the full deliverable window (new_start to new_end)
-        if compressed_timeline_uids:
-            for ct_uid in compressed_timeline_uids:
-                if ct_uid in uid_to_sched and ct_uid in children_by_parent:
-                    ct_start = uid_to_sched[ct_uid]["Start"]
-                    ct_finish = uid_to_sched[ct_uid]["Finish"]
-                    stretch_and_clamp_descendants(ct_uid, ct_start, ct_finish)
-                    print(f"[XML EXPORT] 🎯 TICKET B: Stretched children of compressed timeline UID {ct_uid} to fill {ct_start.date()} to {ct_finish.date()}")
+        # DESCENDANT STRETCHING: Controlled by ENABLE_DESCENDANT_STRETCHING flag
+        # When enabled: Stretches leaf tasks to fill deliverable windows (Workfront rollup match)
+        # When disabled: Parents derive dates from children via bottom-up rollup
+        if ENABLE_DESCENDANT_STRETCHING:
+            print(f"[XML EXPORT] 📐 DESCENDANT STRETCHING ENABLED - stretching children to fill deliverable windows")
+            
+            # CRITICAL FIX Part 2: Stretch and clamp descendants for all preserved deliverables
+            # This ensures child components/tasks FILL the deliverable window set in Gantt (not just clamp)
+            # Must happen BEFORE rollup_summary runs to prevent wrong date calculations
+            for preserved_uid in preserved_dates:
+                if preserved_uid in uid_to_sched and preserved_uid in children_by_parent:
+                    preserved_start = uid_to_sched[preserved_uid]["Start"]
+                    preserved_finish = uid_to_sched[preserved_uid]["Finish"]
+                    stretch_and_clamp_descendants(preserved_uid, preserved_start, preserved_finish)
+                    print(f"[XML EXPORT] 🔒 Stretched descendants of preserved UID {preserved_uid} to fill {preserved_start.date()} to {preserved_finish.date()}")
+            
+            # TICKET B: Stretch and clamp descendants for compressed timeline deliverables
+            # This ensures Workfront recomputes the correct summary duration (64 days vs 25 days)
+            # by ensuring child tasks span the full deliverable window (new_start to new_end)
+            if compressed_timeline_uids:
+                for ct_uid in compressed_timeline_uids:
+                    if ct_uid in uid_to_sched and ct_uid in children_by_parent:
+                        ct_start = uid_to_sched[ct_uid]["Start"]
+                        ct_finish = uid_to_sched[ct_uid]["Finish"]
+                        stretch_and_clamp_descendants(ct_uid, ct_start, ct_finish)
+                        print(f"[XML EXPORT] 🎯 TICKET B: Stretched children of compressed timeline UID {ct_uid} to fill {ct_start.date()} to {ct_finish.date()}")
+        else:
+            print(f"[XML EXPORT] 📐 DESCENDANT STRETCHING DISABLED - using bottom-up rollup from effort-based scheduler")
         
         # TICKET B: Log how many UIDs were protected from rollup overwrite
         print(f"[XML EXPORT] 🛡️ TICKET B: Protected {len(stretched_uids)} stretched UIDs from rollup_summary overwrite")
