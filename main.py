@@ -15056,7 +15056,8 @@ def convert_excel_to_mspdi(
             elif outline_level >= 3:
                 # COMPONENTS & TASKS (OutlineLevel >= 3):
                 # Work = planned hours (effort)
-                # Duration = phase-based business days (NOT derived from hours)
+                # Duration = phase-based business days for LEAF tasks only
+                # Summary tasks (components/parents): Duration=PT0M (Workfront calculates from children)
                 # NO Start/Finish fields - Workfront treats as unscheduled children
                 
                 # Calculate Work from PlannedHours
@@ -15066,19 +15067,23 @@ def convert_excel_to_mspdi(
                 work_minutes = max(0, int(float(work_hours) * 60))
                 SubElement(task, "Work").text = f"PT{work_minutes}M"
                 
-                # CRITICAL FIX: Every leaf task MUST have Duration > 0 for Workfront rollups
-                # Duration = phase-based business days (NOT hours/effort)
-                # This is NORMAL: Task Duration = 12 days, Work = 3h is VALID
-                is_component = outline_level == 3
-                if is_component:
-                    # Components (OutlineLevel=3) are summary tasks - Duration will rollup from children
-                    # Set Duration=0 and Summary=1, Workfront calculates from children
+                # CRITICAL: Use proper leaf task check from Summary flag calculation above
+                # is_summary already accounts for: summary_set membership, is_root, is_deliverable
+                # For OutlineLevel >= 3: is_summary means this task has children (component or parent)
+                # ONLY true leaf tasks (Summary=0) get phase-based Duration
+                if is_summary:
+                    # Summary/component tasks: Duration=PT0M - Workfront calculates from children
                     SubElement(task, "Duration").text = "PT0M"
                 else:
-                    # Leaf tasks (OutlineLevel >= 4) - use phase-based duration
-                    task_name = r.get("Name", "") or r.get("TaskName", "") or ""
-                    phase_duration_minutes = get_phase_duration_minutes(task_name)
-                    SubElement(task, "Duration").text = f"PT{phase_duration_minutes}M"
+                    # TRUE leaf tasks (Summary=0, no children): use phase-based duration
+                    # Also handle zero-work/milestone rows - keep Duration=PT0M
+                    if work_minutes == 0:
+                        # Zero-work or milestone tasks - no duration
+                        SubElement(task, "Duration").text = "PT0M"
+                    else:
+                        task_name = r.get("Name", "") or r.get("TaskName", "") or ""
+                        phase_duration_minutes = get_phase_duration_minutes(task_name)
+                        SubElement(task, "Duration").text = f"PT{phase_duration_minutes}M"
                 
                 # Type = 0 (Fixed Units) for all components and tasks
                 SubElement(task, "Type").text = "0"  # Fixed Units

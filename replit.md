@@ -39,7 +39,10 @@ Preferred communication style: Simple, everyday language.
 - **Workfront Clean Import XML Export (Dec 2025)**: Refactored MSPDI export to prevent Workfront from recalculating dates:
   - Root (OutlineLevel=1): Start/Finish, DurationFormat=7, Work=PT0M, Duration=PT0M
   - Deliverables (OutlineLevel=2): Start/Finish/Duration with Work=0, Summary=1, Type=1 (Fixed Duration)
-  - Components/Tasks (OutlineLevel>=3): NO Start/Finish/Duration fields - only Work (hours), Type=0 (Fixed Units). Workfront treats these as "unscheduled children" that roll up under deliverables without shifting dates.
+  - Components (OutlineLevel=3, Summary=1): Work (hours), Duration=PT0M (calculated from children), Type=0 (Fixed Units)
+  - Leaf Tasks (OutlineLevel>=3, Summary=0): Work (hours) + Duration (phase-based business days), Type=0 (Fixed Units)
+  - **Phase-Based Task Duration (Dec 2025)**: `PHASE_DEFAULT_DURATIONS` maps phase names to business-day durations (general=5d, internal_review=3d, client_review=10d, qa=2d). Leaf tasks get Duration based on phase name matching; summary tasks and zero-work rows get PT0M.
+  - **Assignments Preservation (Dec 2025)**: Assignments block is always emitted with per-role Work values. WORKFRONT CLEANUP no longer strips Assignments element, enabling Assignment Breakdown functionality.
   - **Pricing Start Date Alignment (Dec 2025)**: Preserves user's configured pricing start date (`user_pricing_start`) for Project header (StartDate, CurrentDate) and root task ConstraintDate, preventing stale "next_monday" dates from intermediate task calculations. Compressed timeline only updates L2 deliverables, so project-level dates now use the preserved pricing start while project_finish is derived from actual latest task dates.
 - **Parallel Processing**: Utilizes OpenAI Vision API for parallel PDF image processing.
 - **Smart Image Analysis**: Two-tier image processing system with pre-filtering and deep analysis.
