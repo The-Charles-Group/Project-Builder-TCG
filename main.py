@@ -14884,19 +14884,17 @@ def convert_excel_to_mspdi(
                 print(f"[TIGHT WATERFALL] 🎯 First L2 deliverable UID={first_l2_deliverable_uid} (WBS {l2_candidates[0]['wbs']}) will use SNET constraint")
 
         # Tasks
-        # WORKFRONT FIX: Filter to export only OutlineLevel ≤ 3 (Project, Deliverables, no Components)
+        # WORKFRONT CLEAN IMPORT FIX (Dec 2025):
+        # - Deliverables (OutlineLevel=2): ONLY scheduled tasks with Start/Finish/Duration
+        # - Components/Tasks (OutlineLevel>=3): NO dates, only Work (hours) for effort tracking
+        # - This ensures Workfront doesn't recalculate dates from children
         tasks_elem = SubElement(project, "Tasks")
-        skipped_components = 0
         task_id_counter = 0
         for r in rows:
-            # Calculate outline level for depth filtering
+            # Calculate outline level
             outline_level = r["WBS"].count(".") + 1  # 1 for '1', 2 for '1.1', etc.
             
-            # CRITICAL: Skip components (OutlineLevel > 3) per Workfront requirements
-            if outline_level > 3:
-                skipped_components += 1
-                continue
-            
+            # Include ALL tasks (no depth filtering - include components and tasks)
             task_id_counter += 1
             task = SubElement(tasks_elem, "Task")
             SubElement(task, "UID").text = str(r["UID"])
@@ -14906,37 +14904,33 @@ def convert_excel_to_mspdi(
             name_txt = "Project Summary" if is_root else r["Name"]
             SubElement(task, "Name").text = name_txt
             
-            # IMPORTANT: Keep full WBS paths for uniqueness, only OutlineLevel is capped
-            # Workfront needs full WBS (e.g., "1.2.3.1.1") for unique task identification
-            # But OutlineLevel is capped at 3 for visual hierarchy (Deliverable → Component → Task)
             SubElement(task, "WBS").text = r["WBS"]
             SubElement(task, "OutlineNumber").text = r["WBS"] 
-            SubElement(task, "Start").text = uid_to_sched[r["UID"]]["Start"]
-            SubElement(task, "Finish").text = uid_to_sched[r["UID"]]["Finish"]
+            
+            # CLEAN IMPORT: Only Deliverables (OutlineLevel=2) get Start/Finish
+            # Components/Tasks (OutlineLevel>=3) have NO date fields - Workfront treats as unscheduled children
+            is_deliverable = outline_level == 2 and not is_root
+            if outline_level <= 2:
+                # Root and Deliverables: Include Start/Finish (scheduled)
+                SubElement(task, "Start").text = uid_to_sched[r["UID"]]["Start"]
+                SubElement(task, "Finish").text = uid_to_sched[r["UID"]]["Finish"]
+            # OutlineLevel >= 3: NO Start/Finish fields - unscheduled children
             
             SubElement(task, "OutlineLevel").text = str(outline_level)
             
-            # GPT-5 PRO FIX: Make deliverable/summary mutually exclusive to prevent duplicate ConstraintType tags
-            # WATERFALL FIX: Deliverables are now OutlineLevel=2 (direct children of Project Summary)
-            is_deliverable = outline_level == 2 and not is_root
-            is_summary = (r["WBS"] in summary_set or is_root) and not is_deliverable
+            # Summary flag: components are summary (have children), leaf tasks are not
+            # Deliverables should be Summary=1 since they contain components
+            is_component = outline_level == 3  # L3 = component level
+            is_leaf_task = outline_level >= 4 and r["WBS"] not in summary_set
+            is_summary = (r["WBS"] in summary_set or is_root or is_deliverable) and not is_leaf_task
             SubElement(task, "Summary").text = "1" if is_summary else "0"
             
-            # GPT-5 PRO FIX: Conditional DurationFormat based on manual scheduling
-            # TIGHT_WATERFALL: Deliverables use DurationFormat=7 (auto-scheduled) when enabled
-            # Legacy: 53 (Elapsed Days + Manual) for manually scheduled tasks
-            # 7 (Elapsed Days) for auto-scheduled tasks (root, leaf, and deliverables in tight waterfall mode)
-            if TIGHT_WATERFALL_ENABLED and is_deliverable:
-                # TIGHT WATERFALL: Deliverables are auto-scheduled with ASAP constraint
-                is_manually_scheduled = False
-            else:
-                is_manually_scheduled = is_deliverable or (is_summary and not is_root)
-            SubElement(task, "DurationFormat").text = "53" if is_manually_scheduled else "7"
-            
-            # GPT-5 PRO FIX: Reordered branches to prevent overlap (root → deliverable → summary → leaf)
+            # CLEAN IMPORT: Branch by outline level (root → deliverable → components/tasks)
+            # DurationFormat only set for root and deliverables, NOT for OutlineLevel >= 3
             if is_root:
                 # ROOT TASK (OutlineLevel=1): PT0M duration, no Manual* tags
                 # WORKFRONT FIX: ConstraintType=4 = Start No Earlier Than (SNET)
+                SubElement(task, "DurationFormat").text = "7"  # Elapsed Days (auto-scheduled)
                 SubElement(task, "Work").text = "PT0M"
                 SubElement(task, "Duration").text = "PT0M"
                 SubElement(task, "ConstraintType").text = "4"  # Start No Earlier Than (SNET)
@@ -14945,8 +14939,8 @@ def convert_excel_to_mspdi(
             
             elif is_deliverable:
                 # DELIVERABLE TASKS (OutlineLevel=2)
-                # TIGHT WATERFALL: ASAP constraint, no Manual* tags, FS chain (built later)
-                # LEGACY: SNET constraint + Manual* tags if has children
+                # CLEAN IMPORT: DurationFormat=7 (auto-scheduled), Work=PT0M, Duration from business days
+                SubElement(task, "DurationFormat").text = "7"  # Elapsed Days (auto-scheduled)
                 SubElement(task, "Work").text = "PT0M"
                 
                 # TICKET: Use business days from compression_metadata for Workfront alignment
@@ -15023,104 +15017,24 @@ def convert_excel_to_mspdi(
                     
                     print(f"[WORKFRONT] 🔒 Applied FNLT constraint to deliverable: {name_txt} (WBS {r['WBS']}, Finish={constraint_date})")
             
-            elif is_summary and not is_root:
-                # NON-ROOT SUMMARY TASKS (OutlineLevel 3+): Calculate actual duration from Start/Finish
-                SubElement(task, "Work").text = "PT0M"
+            elif outline_level >= 3:
+                # COMPONENTS & TASKS (OutlineLevel >= 3):
+                # CLEAN IMPORT FIX: NO Start/Finish/Duration fields - Workfront treats as unscheduled
+                # Only Work (planned hours) is set - this makes Assignment Breakdown work
+                # Type = 0 (Fixed Units) to prevent Workfront from calculating Duration from hours
                 
-                # Calculate Duration using BUSINESS DAYS (Mon-Fri) to match Workfront
-                # The helper is inclusive of both endpoints, but duration is start-to-finish (exclusive)
-                # So we subtract 1 to get the correct span (e.g., 65 inclusive → 64 duration)
-                try:
-                    start_str = uid_to_sched[r["UID"]]["Start"]
-                    finish_str = uid_to_sched[r["UID"]]["Finish"]
-                    start_dt = datetime.datetime.fromisoformat(start_str.replace('Z', ''))
-                    finish_dt = datetime.datetime.fromisoformat(finish_str.replace('Z', ''))
-                    # Business days inclusive count, then -1 for exclusive duration semantics
-                    biz_days_inclusive = calculate_business_days_between(start_dt.date(), finish_dt.date())
-                    duration_days = max(1, biz_days_inclusive - 1)
-                    duration_minutes = duration_days * 480  # 8-hour workday
-                    SubElement(task, "Duration").text = f"PT{duration_minutes}M"
-                except Exception:
-                    # Fallback to 1 day
-                    SubElement(task, "Duration").text = "PT480M"
-                
-                # Summary tasks need Type, IsEffortDriven, and ConstraintType
-                SubElement(task, "Type").text = "1"  # Fixed Duration
-                SubElement(task, "IsEffortDriven").text = "0"
-                SubElement(task, "ConstraintType").text = "5"  # Start No Later Than (for summaries)
-            # Only set Duration/Work for non-summary leaf tasks
-            else:
-                # WORKFRONT FIX: Duration MUST equal (Finish - Start) for ALL tasks
-                # NO 960-minute snapping - use actual timestamp difference
-                # This is critical to prevent Workfront from recalculating dates on import
-                
-                start_val = uid_to_sched[r["UID"]]["Start"]
-                finish_val = uid_to_sched[r["UID"]]["Finish"]
-                
-                # Robust datetime parser that handles timezone suffixes (Z, +00:00, etc.)
-                def to_datetime(val):
-                    if isinstance(val, datetime.datetime):
-                        return val
-                    elif isinstance(val, str):
-                        # Remove timezone suffixes for parsing
-                        val_clean = val.replace('Z', '+00:00')  # Convert Z to +00:00
-                        # Try parsing with fromisoformat (handles timezones)
-                        try:
-                            return datetime.datetime.fromisoformat(val_clean)
-                        except ValueError:
-                            # Fallback: strip timezone manually and parse
-                            val_clean = val.split('+')[0].split('-')
-                            # Rejoin date portion (first 3 parts: YYYY, MM, DD)
-                            val_clean = '-'.join(val_clean[:3]) + val_clean[3] if len(val_clean) > 3 else '-'.join(val_clean)
-                            val_clean = val_clean.split('.')[0]  # Remove milliseconds
-                            return datetime.datetime.fromisoformat(val_clean)
-                    else:
-                        return val
-                
-                start_dt = to_datetime(start_val)
-                finish_dt = to_datetime(finish_val)
-                
-                # Work calculation: For multi-assignment tasks, sum all assignee hours
-                if r.get("multi_assignment") and "assignments" in r:
-                    # Multi-assignment: sum all assignee work hours
-                    total_work_hours = sum(a["work_hours"] for a in r["assignments"])
-                    work_minutes = int(total_work_hours * 60)
-                else:
-                    # Single assignment: use PlannedHours from Gantt (actual effort)
-                    work_hours = uid_to_sched[r['UID']].get('PlannedHours', 0)
-                    if pd.isna(work_hours):
-                        work_hours = 0
-                    work_minutes = max(0, int(work_hours * 60))
-                
+                # Calculate Work from PlannedHours
+                work_hours = r.get("PlannedHours", 0) or 0
+                if pd.isna(work_hours):
+                    work_hours = 0
+                work_minutes = max(0, int(float(work_hours) * 60))
                 SubElement(task, "Work").text = f"PT{work_minutes}M"
                 
-                # WORKFRONT FIX: Duration = (Finish - Start) business days × 480 minutes
-                # This matches the calendar-based duration Workfront expects
-                try:
-                    biz_days_inclusive = calculate_business_days_between(start_dt.date(), finish_dt.date())
-                    duration_days = max(1, biz_days_inclusive - 1) if biz_days_inclusive > 1 else max(0, biz_days_inclusive)
-                    dur_minutes = duration_days * 480 if duration_days > 0 else 0
-                except Exception:
-                    # Fallback: use work-based calculation
-                    work_hours = work_minutes / 60.0
-                    if work_hours == 0:
-                        dur_minutes = 0
-                    else:
-                        import math
-                        required_days = max(1, math.ceil(work_hours / 8.0))
-                        dur_minutes = required_days * 480
-                
-                SubElement(task, "Duration").text = f"PT{dur_minutes}M"
-                
-                # WORKFRONT FIX: Set ALL leaf tasks as Fixed Duration to prevent effort-driven recalculation
-                # Type=1 (Fixed Duration) + IsEffortDriven=0 ensures Workfront doesn't adjust durations based on effort
-                SubElement(task, "Type").text = "1"  # Fixed Duration
+                # NO Duration field for OutlineLevel >= 3 - critical for clean import
+                # Type = 0 (Fixed Units) for all components and tasks
+                SubElement(task, "Type").text = "0"  # Fixed Units
                 SubElement(task, "IsEffortDriven").text = "0"
-                
-                # WORKFRONT FIX: Explicit ASAP constraint on ALL leaf tasks to prevent constraint inheritance
-                # Without this, leaf tasks inherit parent deliverable's SNET constraint, causing serial execution
-                # ConstraintType=0 (As Soon As Possible) allows tasks to start when dependencies are met
-                SubElement(task, "ConstraintType").text = "0"  # As Soon As Possible
+                # NO ConstraintType for unscheduled tasks
             
             # GPT-5 PRO FIX: Add CalendarUID to all tasks to enable calendar-day duration display
             # Without this, Workfront treats durations as raw minutes and displays "0.12 days"
@@ -16149,8 +16063,7 @@ def convert_excel_to_mspdi(
             print(f"[MSPDI Validation] Could not validate dates: {e}")
 
         # Log skipped components
-        if skipped_components > 0:
-            print(f"[WORKFRONT] 🚫 Skipped {skipped_components} components (OutlineLevel > 3) per depth limit")
+        print(f"[WORKFRONT] ✅ Exported all tasks (Components/Tasks have Work only, no dates)")
         
         # ═══════════════════════════════════════════════════════════════════════════
         # WORKFRONT CLEANUP: Strip problematic elements for clean import
@@ -16303,7 +16216,7 @@ def convert_excel_to_mspdi(
         
         # Validation 3: Verify exported task count
         exported_task_count = len(tasks_elem.findall("Task"))
-        print(f"[VALIDATION] 📊 Exported {exported_task_count} tasks (skipped {skipped_components} components)")
+        print(f"[VALIDATION] 📊 Exported {exported_task_count} tasks (all levels included, L3+ have Work only)")
         
         if validation_errors:
             print(f"[VALIDATION] ⚠️ {len(validation_errors)} validation warning(s) detected")

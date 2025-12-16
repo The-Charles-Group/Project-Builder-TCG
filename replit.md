@@ -36,6 +36,10 @@ Preferred communication style: Simple, everyday language.
 - **Component Hours Preservation Guards**: Three-part protection ensuring `component_hours` survive the collect→sync→export pipeline without DOM overwrites.
 - **Nested Hierarchy Refactoring**: New schema models in `models.py` supporting Deliverable → Component → Task → Assignment hierarchy with bottom-up rollup calculations and canonical key generation. XML/MSPDI export supports this nested structure.
 - **Workfront Duration Alignment**: Step 4 UI and MSP/XML exports use business-day durations matching Workfront's "Duration" column. Child tasks are stretched to span the full deliverable window to ensure Workfront's calculated duration matches the intended working-day duration.
+- **Workfront Clean Import XML Export (Dec 2025)**: Refactored MSPDI export to prevent Workfront from recalculating dates:
+  - Root (OutlineLevel=1): Start/Finish, DurationFormat=7, Work=PT0M, Duration=PT0M
+  - Deliverables (OutlineLevel=2): Start/Finish/Duration with Work=0, Summary=1, Type=1 (Fixed Duration)
+  - Components/Tasks (OutlineLevel>=3): NO Start/Finish/Duration fields - only Work (hours), Type=0 (Fixed Units). Workfront treats these as "unscheduled children" that roll up under deliverables without shifting dates.
 - **Parallel Processing**: Utilizes OpenAI Vision API for parallel PDF image processing.
 - **Smart Image Analysis**: Two-tier image processing system with pre-filtering and deep analysis.
 - **Session Isolation System**: Complete data isolation between different RFPs using unique session IDs.

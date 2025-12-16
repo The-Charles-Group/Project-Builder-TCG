@@ -1,0 +1,172 @@
+What the XML should do (this is the critical part)
+1. Deliverables (OutlineLevel = 2)
+
+These are the only scheduled tasks.
+
+For each deliverable task in XML:
+
+<Start> = app deliverable start
+
+<Finish> = app deliverable finish
+
+<Duration> = business_minutes_between(Start, Finish)
+
+<Work> = PT0M
+
+<Summary> = 1
+
+<Type> = 1 (Fixed Duration)
+
+<EffortDriven> = 0
+
+This guarantees:
+
+Workfront does not recompute dates from hours
+
+Deliverable bars match exactly
+
+2. Components & Tasks (OutlineLevel ≥ 3)
+
+These must NOT influence dates.
+
+For every component or task:
+
+Do NOT set <Start>
+
+Do NOT set <Finish>
+
+Do NOT set <Duration>
+
+Set <Work> = planned hours (PT{hours*60}M)
+
+Set <Summary> correctly:
+
+component = 1
+
+task = 0
+
+Set <Type> = 0 (Fixed Units)
+
+This is important:
+When Start/Finish/Duration are missing, Workfront treats these as unscheduled children and rolls them up under the deliverable without shifting dates.
+
+3. Assignments (this is where effort lives)
+
+Assignments should exist only on leaf tasks.
+
+For each assignment:
+
+<TaskUID> = leaf task UID
+
+<ResourceUID> = role resource UID
+
+<Work> = role‑specific hours
+
+<Units> = 1 (or omit—Workfront defaults correctly)
+
+Make sure:
+
+Sum(Assignment.Work) == Task.Work
+
+This is what makes Assignment Breakdown column correct.
+
+What NOT to do (these are the landmines)
+
+Do not do any of the following:
+
+❌ Put roles in task titles
+
+❌ Give tasks Start / Finish / Duration
+
+❌ Let task Duration = hours ÷ 8
+
+❌ Try to “stretch” tasks to fill deliverables
+
+❌ Show task‑level Gantt bars in the app
+
+Every one of those caused the regressions you’ve been fighting.
+
+Why this works (and why it worked before)
+
+Workfront schedules from deliverables
+
+Tasks contribute hours only
+
+Assignment Breakdown works because Work exists
+
+Dates don’t move because Workfront has no task dates to recalculate
+
+This is exactly why you previously saw:
+
+correct 64 / 65 day durations
+
+correct start & end dates
+
+clean imports
+
+Very concrete instructions for Replit (copy/paste)
+A. In main.py – Step 4 Gantt
+
+Render deliverables only
+
+Remove any logic that computes or displays task/component dates
+
+Task data stays tabular, not scheduled
+
+B. In XML export
+
+Deliverables
+
+Start / Finish / Duration present
+
+Work = 0
+
+Type = Fixed Duration
+
+Summary = 1
+
+Components + Tasks
+
+No Start / Finish / Duration fields
+
+Work = planned hours
+
+Summary = correct
+
+Type = Fixed Units
+
+Assignments
+
+One assignment per role per task
+
+Work populated
+
+No roles in names
+
+Validation before export
+
+No task with both Work and Duration
+
+No assignment referencing missing task/resource
+
+No predecessor referencing filtered task
+
+If validation fails → block export.
+
+What you should expect after this
+
+✅ App Gantt == Workfront Gantt (deliverables)
+
+✅ Due dates and durations match exactly
+
+✅ Assignment + Assignment Breakdown columns populate
+
+✅ XML imports every time
+
+❌ No task‑level Gantt (by design)
+
+This is not a compromise—it’s the correct model for agency planning where:
+
+timelines are calendar‑driven,
+
+effort is resource‑driven.
