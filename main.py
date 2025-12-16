@@ -6575,21 +6575,28 @@ def compress_deliverable_timeline(
         shift_days = mapping['shift_days']
         
         if shift_days == 0:
-            # TICKET: Even unshifted tasks need working duration fields for frontend display
+            # GPT 5.2 PRO FIX: Only stamp timeline_* fields onto deliverable-level tasks (level == 2)
+            # Child tasks should use their REAL start/end to prevent UI/Workfront drift
             task_copy = task.copy()
-            task_copy['timeline_working_duration_days'] = mapping['duration_business_days']
-            task_copy['timeline_start'] = mapping['new_start']
-            task_copy['timeline_end'] = mapping['new_end']
+            task_level = task.get('level')
+            is_deliverable = (task_level == 2 or task_level == 'deliverable')
+            if is_deliverable:
+                task_copy['timeline_working_duration_days'] = mapping['duration_business_days']
+                task_copy['timeline_start'] = mapping['new_start']
+                task_copy['timeline_end'] = mapping['new_end']
             compressed_tasks.append(task_copy)
             continue
         
         new_task = task.copy()
         
-        # TICKET: Add working duration fields to task for frontend display
-        # This ensures "Working duration (Mon-Fri): X days" shows immediately after Generate AI Timeline
-        new_task['timeline_working_duration_days'] = mapping['duration_business_days']
-        new_task['timeline_start'] = mapping['new_start']
-        new_task['timeline_end'] = mapping['new_end']
+        # GPT 5.2 PRO FIX: Only stamp timeline_* fields onto deliverable-level tasks (level == 2)
+        # Child tasks should use their REAL start/end (computed via shifting below)
+        task_level = task.get('level')
+        is_deliverable = (task_level == 2 or task_level == 'deliverable')
+        if is_deliverable:
+            new_task['timeline_working_duration_days'] = mapping['duration_business_days']
+            new_task['timeline_start'] = mapping['new_start']
+            new_task['timeline_end'] = mapping['new_end']
         
         task_start = task.get('start', '')
         task_end = task.get('end', '')

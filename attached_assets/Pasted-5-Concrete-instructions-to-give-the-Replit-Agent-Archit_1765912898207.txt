@@ -1,0 +1,99 @@
+5) Concrete instructions to give the Replit Agent + Architect
+Agent (implementation checklist)
+
+Stop filtering out hierarchy levels in export
+
+Remove the “OutlineLevel ≤ 3” skip. It’s explicitly shown in the doc and it creates invalid references. 
+
+12.12.25 app gantt timeline sho…
+
+If you must cap what the UI shows, only cap in UI — never in export.
+
+Add a hard validator before writing the XML
+
+Build sets:
+
+task_uids = {Task.UID}
+
+resource_uids = {Resource.UID}
+
+Validate:
+
+every PredecessorUID ∈ task_uids
+
+every Assignment.TaskUID ∈ task_uids
+
+every Assignment.ResourceUID ∈ resource_uids
+
+If any fail, block export and show the exact list of offending tasks in the UI.
+
+Duration consistency rule: pick ONE canonical truth
+
+Best for Workfront stability: Start/Finish are truth; Duration is derived from Start/Finish (business-day span). Your doc already calls this out as critical. 
+
+12.12.25 app gantt timeline sho…
+
+Remove the biz_days_inclusive - 1 pattern. 
+
+St.Regis_Nashville_Branding_Age…
+
+Use the “DO NOT subtract 1” rule. 
+
+12.12.25 app gantt timeline sho…
+
+Fix Step 4 scheduling: compute leaf tasks first
+
+In Step 4 timeline generation:
+
+schedule leaf tasks (general → internal_review → client_review → qa) sequentially inside each component
+
+schedule components sequentially inside deliverable
+
+roll up deliverable start/end from children
+
+DO NOT shift using timedelta(days=...) for anything calendar-related. Use working-day add. The current code uses calendar days. 
+
+12.12.25 app gantt timeline sho…
+
+Do not write deliverable timeline fields onto every task
+
+Right now, timeline_start/timeline_end are being stamped onto tasks using deliverable mapping. 
+
+12.12.25 app gantt timeline sho…
+
+Change that so:
+
+deliverables have timeline_*
+
+tasks use their real start/end
+
+Otherwise UI will keep drifting from what XML/Workfront are actually doing.
+
+Keep Workfront-required header fields before <Name>
+
+Your doc already states this requirement. 
+
+12.12.25 app gantt timeline sho…
+
+Mimic the Workfront-exported header set. 
+
+St.Regis_Nashville_Branding_Age…
+
+Architect (design decision you must lock)
+
+Pick which model is “truth” for leaf tasks:
+
+Model A (Window-based phases)
+client_review/internal_review/qa are time windows (duration comes from phase policy), hours are just effort.
+✅ Matches typical agency reality.
+✅ Explains “3 hours but 12 days.”
+✅ Easy to make waterfall.
+❗ Requires explicit phase-duration allocation rules.
+
+Model B (Effort-only)
+Duration is derived directly from hours (hours / 8h/day), maybe rounded.
+✅ Simple.
+✅ No “wait window” weirdness.
+❗ Schedules will get shorter than your current app spans.
+
+If your goal is “app timeline spans must remain as-is and match Workfront,” you almost certainly want Model A, but with sequential ordering so the Gantt looks like a waterfall (not everything starting on the same day).
