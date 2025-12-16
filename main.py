@@ -13158,6 +13158,28 @@ def convert_excel_to_mspdi(
     
     Returns a dictionary with statistics about the conversion process.
     """
+    # PHASE_DEFAULT_DURATIONS: Default business-day durations for task phases
+    # These are used when tasks don't have explicit Start/Finish dates
+    # Duration = business-day span of the phase window (NOT hours)
+    # Work = planned effort (hours) via Assignments
+    PHASE_DEFAULT_DURATIONS = {
+        "general": 5,           # 5 business days
+        "internal_review": 3,   # 3 business days
+        "client_review": 10,    # 10 business days
+        "qa": 2,                # 2 business days
+    }
+    
+    def get_phase_duration_minutes(task_name: str) -> int:
+        """Get task duration in minutes based on phase name.
+        Returns duration in PT minutes format (business days * 480 min/day).
+        """
+        task_lower = str(task_name).lower().strip()
+        for phase_key, days in PHASE_DEFAULT_DURATIONS.items():
+            if phase_key in task_lower:
+                return days * 480  # 8 hours per day = 480 minutes
+        # Default: 1 business day for unknown phases
+        return 480
+    
     try:
         # Load Excel data
         df = pd.read_excel(input_xlsx, sheet_name=sheet_name)
@@ -15033,9 +15055,9 @@ def convert_excel_to_mspdi(
             
             elif outline_level >= 3:
                 # COMPONENTS & TASKS (OutlineLevel >= 3):
-                # CLEAN IMPORT FIX: NO Start/Finish/Duration fields - Workfront treats as unscheduled
-                # Only Work (planned hours) is set - this makes Assignment Breakdown work
-                # Type = 0 (Fixed Units) to prevent Workfront from calculating Duration from hours
+                # Work = planned hours (effort)
+                # Duration = phase-based business days (NOT derived from hours)
+                # NO Start/Finish fields - Workfront treats as unscheduled children
                 
                 # Calculate Work from PlannedHours
                 work_hours = r.get("PlannedHours", 0) or 0
@@ -15044,7 +15066,20 @@ def convert_excel_to_mspdi(
                 work_minutes = max(0, int(float(work_hours) * 60))
                 SubElement(task, "Work").text = f"PT{work_minutes}M"
                 
-                # NO Duration field for OutlineLevel >= 3 - critical for clean import
+                # CRITICAL FIX: Every leaf task MUST have Duration > 0 for Workfront rollups
+                # Duration = phase-based business days (NOT hours/effort)
+                # This is NORMAL: Task Duration = 12 days, Work = 3h is VALID
+                is_component = outline_level == 3
+                if is_component:
+                    # Components (OutlineLevel=3) are summary tasks - Duration will rollup from children
+                    # Set Duration=0 and Summary=1, Workfront calculates from children
+                    SubElement(task, "Duration").text = "PT0M"
+                else:
+                    # Leaf tasks (OutlineLevel >= 4) - use phase-based duration
+                    task_name = r.get("Name", "") or r.get("TaskName", "") or ""
+                    phase_duration_minutes = get_phase_duration_minutes(task_name)
+                    SubElement(task, "Duration").text = f"PT{phase_duration_minutes}M"
+                
                 # Type = 0 (Fixed Units) for all components and tasks
                 SubElement(task, "Type").text = "0"  # Fixed Units
                 SubElement(task, "IsEffortDriven").text = "0"
@@ -16081,13 +16116,14 @@ def convert_excel_to_mspdi(
         
         # ═══════════════════════════════════════════════════════════════════════════
         # WORKFRONT CLEANUP: Strip problematic elements for clean import
-        # Per user requirements: No Resources, No Assignments, No FixedCost/CostType,
+        # Per user requirements: No Resources, No FixedCost/CostType,
         # Snap times to 09:00/17:00, No constraints on summary tasks
+        # KEEP Assignments block - required for Assignment Breakdown in Workfront
         # CRITICAL: Always run cleanup for Workfront compatibility (not conditional)
         # ═══════════════════════════════════════════════════════════════════════════
         if True:  # Always run Workfront cleanup
             print(f"\n[WORKFRONT CLEANUP] Applying cleanup rules for Workfront import...")
-            cleanup_stats = {"resources_removed": 0, "assignments_removed": 0, "fixedcost_removed": 0, 
+            cleanup_stats = {"resources_removed": 0, "fixedcost_removed": 0, 
                             "times_snapped": 0, "summary_constraints_removed": 0}
             
             # 1. Remove <Resources> element entirely
@@ -16097,12 +16133,12 @@ def convert_excel_to_mspdi(
                 cleanup_stats["resources_removed"] = 1
                 print(f"[WORKFRONT CLEANUP] 🗑️ Removed <Resources> element")
             
-            # 2. Remove <Assignments> element entirely
-            assignments_elem_to_remove = project.find("Assignments")
-            if assignments_elem_to_remove is not None:
-                project.remove(assignments_elem_to_remove)
-                cleanup_stats["assignments_removed"] = 1
-                print(f"[WORKFRONT CLEANUP] 🗑️ Removed <Assignments> element")
+            # 2. KEEP <Assignments> block - required for Assignment Breakdown to work
+            # Do NOT remove assignments - they contain per-role Work values
+            assignments_elem = project.find("Assignments")
+            if assignments_elem is not None:
+                assignment_count = len(assignments_elem.findall("Assignment"))
+                print(f"[WORKFRONT CLEANUP] ✅ Keeping <Assignments> block ({assignment_count} assignments)")
             
             # 3. Remove FixedCost and CostType from all tasks
             for task_elem in tasks_elem.findall("Task"):

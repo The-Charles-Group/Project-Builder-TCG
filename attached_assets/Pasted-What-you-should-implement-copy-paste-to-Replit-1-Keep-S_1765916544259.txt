@@ -1,0 +1,167 @@
+What you should implement (copy/paste to Replit)
+1. Keep Step 4 Gantt deliverable‑only
+
+Do not visualize tasks in the app Gantt. You were right earlier.
+
+Step 4 = Deliverables only
+Tasks = effort + resourcing only
+
+No change needed here.
+
+2. Every leaf task MUST have a Duration in the XML
+
+Even if you don’t show it in the app.
+
+For every non‑summary task:
+
+<Duration> must exist
+
+<Duration> must be > 0
+
+<Duration> does NOT have to equal effort
+
+Correct rule:
+Task Duration = business-day span of the phase window
+Task Work     = planned effort (hours)
+
+
+Example:
+
+client_review
+
+Work = 3h
+
+Duration = 12 business days
+✔ This is VALID and NORMAL in Workfront
+
+Right now you’re exporting:
+
+Work = 3h
+
+Duration = missing / 0
+❌ That breaks rollups.
+
+3. Where to get task Duration (without task Gantt)
+
+Use your phase window logic, not hours.
+
+You already have this concept:
+
+general
+
+internal_review
+
+client_review
+
+qa
+
+Each of those has an implied elapsed window, even if effort is tiny.
+
+So:
+
+PHASE_DEFAULT_DURATIONS = {
+    "general": 5,          # business days
+    "internal_review": 3,
+    "client_review": 10,
+    "qa": 2,
+}
+
+
+Then, in XML export:
+
+task_duration_days = PHASE_DEFAULT_DURATIONS.get(task.name, 1)
+task_duration_minutes = task_duration_days * 480
+
+
+Write:
+
+<Duration>PT{task_duration_minutes}M</Duration>
+
+
+That’s it.
+
+You do not need task start/end dates in the app.
+You do need task duration in the XML.
+
+4. Stop creating per‑role “tasks”
+
+This is also hurting you.
+
+Right now you have:
+
+client_review
+  client_review
+  client_review
+  client_review
+
+
+That is wrong.
+
+Correct structure:
+
+client_review   (ONE TASK)
+  Assignments:
+    - Account Manager: 1h
+    - Copywriter: 1h
+    - Strategist: 1h
+
+
+So:
+
+ONE task per phase
+
+MANY <Assignment> entries
+
+No OutlineLevel 5 role tasks
+
+This is why your assignment breakdown is weird and your hierarchy is bloated.
+
+5. Summary rules (this matters)
+Level	Summary	Work	Duration
+Deliverable	1	0	YES
+Component	1	0	YES (rollup)
+Task	0	YES	YES
+
+Right now your tasks are:
+
+Summary = 0
+
+Work = YES
+
+Duration = ❌ NO
+
+That combination always yields 0‑day duration in Workfront.
+
+What you should expect after this fix
+
+Once you do ONLY the above:
+
+✔ Planned Hours stay correct
+
+✔ Assignment Breakdown populates correctly
+
+✔ Duration column shows non‑zero
+
+✔ Deliverable durations match app Gantt
+
+✔ Workfront Gantt becomes sane again
+
+✔ No task‑level Gantt needed in the app
+
+You will NOT see 0 days anymore.
+
+Why this is the “right” stopping point
+
+You were correct earlier when you said:
+
+“If we can’t make it work because of task‑level Gantt, then don’t.”
+
+This solution does not require task‑level Gantt in the app.
+
+It only requires:
+
+task‑level Duration in the XML
+
+task‑level Work via Assignments
+
+That’s how Workfront is designed to work.
