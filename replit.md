@@ -40,6 +40,7 @@ Preferred communication style: Simple, everyday language.
   - Root (OutlineLevel=1): Start/Finish, DurationFormat=7, Work=PT0M, Duration=PT0M
   - Deliverables (OutlineLevel=2): Start/Finish/Duration with Work=0, Summary=1, Type=1 (Fixed Duration)
   - Components/Tasks (OutlineLevel>=3): NO Start/Finish/Duration fields - only Work (hours), Type=0 (Fixed Units). Workfront treats these as "unscheduled children" that roll up under deliverables without shifting dates.
+  - **Pricing Start Date Alignment (Dec 2025)**: Preserves user's configured pricing start date (`user_pricing_start`) for Project header (StartDate, CurrentDate) and root task ConstraintDate, preventing stale "next_monday" dates from intermediate task calculations. Compressed timeline only updates L2 deliverables, so project-level dates now use the preserved pricing start while project_finish is derived from actual latest task dates.
 - **Parallel Processing**: Utilizes OpenAI Vision API for parallel PDF image processing.
 - **Smart Image Analysis**: Two-tier image processing system with pre-filtering and deep analysis.
 - **Session Isolation System**: Complete data isolation between different RFPs using unique session IDs.

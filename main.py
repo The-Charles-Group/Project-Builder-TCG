@@ -13693,6 +13693,13 @@ def convert_excel_to_mspdi(
             project_start = datetime.datetime.now().replace(hour=8, minute=0, second=0, microsecond=0)
         else:
             project_start = datetime.datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
+        
+        # CRITICAL FIX: Preserve user's configured pricing start for project header/constraint
+        # The compressed timeline updates L2 deliverables but not L3/L4 children. If we derive
+        # project_start from min(all_starts), we'd pick up old dates from non-updated children.
+        # Instead, preserve the user's configured start for header fields (StartDate, CurrentDate,
+        # ConstraintDate) while still deriving project_finish from actual task dates.
+        user_pricing_start = project_start  # Preserve before any derived calculations modify it
 
         # Business calendar helpers (using same Mon-Fri, 8-12 & 13-17 schedule)
         from datetime import time, date
@@ -14295,20 +14302,22 @@ def convert_excel_to_mspdi(
                         break
                 
                 if root_task_uid and root_task_uid in uid_to_sched:
-                    uid_to_sched[root_task_uid]["Start"] = project_start.strftime("%Y-%m-%dT%H:%M:%S")
+                    # FIX: Use user_pricing_start for root task Start (not derived from all tasks)
+                    # This ensures root task aligns with project header StartDate
+                    uid_to_sched[root_task_uid]["Start"] = user_pricing_start.strftime("%Y-%m-%dT%H:%M:%S")
                     uid_to_sched[root_task_uid]["Finish"] = project_finish.strftime("%Y-%m-%dT%H:%M:%S")
                 
-                print(f"[MSPDI Export] Project dates derived from timeline tasks:")
-                print(f"  - Start: {project_start.strftime('%Y-%m-%d')} (earliest task)")
-                print(f"  - Finish: {project_finish.strftime('%Y-%m-%d')} (latest task)")
-                print(f"  - Duration: {(project_finish - project_start).days} days")
+                print(f"[MSPDI Export] Project dates configured:")
+                print(f"  - User Pricing Start: {user_pricing_start.strftime('%Y-%m-%d')} (configured)")
+                print(f"  - Derived Finish: {project_finish.strftime('%Y-%m-%d')} (latest task)")
+                print(f"  - Duration: {(project_finish - user_pricing_start).days} days")
             else:
-                # Fallback: use calculated project_start for both
-                project_finish = project_start + datetime.timedelta(days=180)
+                # Fallback: use user_pricing_start for both
+                project_finish = user_pricing_start + datetime.timedelta(days=180)
                 print(f"[MSPDI Export] WARNING: No valid task dates found, using fallback project dates")
         else:
             # No tasks scheduled - use fallback
-            project_finish = project_start + datetime.timedelta(days=180)
+            project_finish = user_pricing_start + datetime.timedelta(days=180)
             print(f"[MSPDI Export] WARNING: No task schedules found, using fallback project dates")
 
         # ====================================================================================
@@ -14791,10 +14800,13 @@ def convert_excel_to_mspdi(
         SubElement(project, "Name").text = (project_name or project_title)
         SubElement(project, "CreationDate").text = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         
-        # FIX: Use actual project dates derived from timeline tasks (not fallback calculations)
-        SubElement(project, "StartDate").text = project_start.strftime("%Y-%m-%dT%H:%M:%S")
+        # FIX: Use user's configured pricing start for header fields (StartDate, CurrentDate)
+        # This ensures alignment with the user's intended project start, not derived from
+        # intermediate task calculations that may include stale dates from non-updated children.
+        # project_finish is still derived from actual latest task dates.
+        SubElement(project, "StartDate").text = user_pricing_start.strftime("%Y-%m-%dT%H:%M:%S")
         SubElement(project, "FinishDate").text = project_finish.strftime("%Y-%m-%dT%H:%M:%S")
-        SubElement(project, "CurrentDate").text = project_start.strftime("%Y-%m-%dT%H:%M:%S")
+        SubElement(project, "CurrentDate").text = user_pricing_start.strftime("%Y-%m-%dT%H:%M:%S")
         
         # Project header tuning
         SubElement(project, "DefaultCalendarUID").text = "1"
@@ -14934,7 +14946,9 @@ def convert_excel_to_mspdi(
                 SubElement(task, "Work").text = "PT0M"
                 SubElement(task, "Duration").text = "PT0M"
                 SubElement(task, "ConstraintType").text = "4"  # Start No Earlier Than (SNET)
-                SubElement(task, "ConstraintDate").text = uid_to_sched[r["UID"]]["Start"]
+                # FIX: Use user's configured pricing start for ConstraintDate instead of derived value
+                # This ensures alignment with project header StartDate
+                SubElement(task, "ConstraintDate").text = user_pricing_start.strftime("%Y-%m-%dT%H:%M:%S")
                 # Root does NOT get Manual* tags or Type/IsEffortDriven per GPT-5 Pro spec
             
             elif is_deliverable:
