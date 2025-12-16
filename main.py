@@ -4780,7 +4780,10 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                                     nested_task_data = nt
                                     break
                         
-                        dur = int(duration_by_tg.get(tg, 1)) if not use_nested_path else 1
+                        # 5.2 PRO FIX Step A: Use duration_by_tg/offset_by_tg for ALL paths (nested AND legacy)
+                        # Never default to dur=1 - always honor the schedule-derived duration
+                        dur = int(duration_by_tg.get(tg, 1))
+                        
                         if use_nested_path:
                             label_core = tg  # Task label is already in tg
                         else:
@@ -4793,10 +4796,9 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                         task_ordinal = (month_idx-1)*total_tasks_per_month + k
                         wbs_task = f"{wbs_comp}.{task_ordinal}"
 
-                        if use_nested_path:
-                            base_offset = dstart  # Simplified for nested
-                        else:
-                            base_offset = dstart + offset_by_tg.get(tg, 0) + ((month_idx-1) * total_deliv_duration)
+                        # 5.2 PRO FIX Step A: Use offset_by_tg for ALL paths (nested AND legacy)
+                        # Never default to base_offset=dstart - always use proper task group offsets
+                        base_offset = dstart + offset_by_tg.get(tg, 0) + ((month_idx-1) * total_deliv_duration)
 
                         # ============================================================
                         # Build role assignments FIRST (for MSP Assignment export)
@@ -11295,14 +11297,18 @@ def api_post_scenarios(payload: dict, request: Request):
 @app.post("/api/gantt/task_level")
 def api_task_level_gantt(payload: dict):
     """
-    Returns task-level Gantt data using the same uid_to_sched that XML export uses.
-    This ensures UI Gantt matches Workfront exactly.
+    5.2 PRO Step D: Returns ALL WBS rows for task-level Gantt display.
+    This ensures UI Gantt matches Workfront exactly by using same schedule source.
     
-    Returns L2 (Deliverable) → L3 (Component) → L4 (Task) hierarchy with:
-    - effort_hours: Planned hours (work)
-    - duration_days: Business-day span (Start→Finish)
+    Returns flat list of ALL rows with:
+    - uid: Unique row identifier
+    - parent_uid: Parent row identifier (for hierarchy)
+    - name: Task/component/deliverable name
+    - level: Outline level (1=Project, 2=Deliverable, 3=Component, 4=Task)
     - start: ISO date string
-    - end: ISO date string
+    - finish: ISO date string
+    - planned_hours: Effort (work hours)
+    - duration_business_days: Business-day span
     """
     session_id = payload.get("session_id") or payload.get("sessionId")
     if not session_id:
@@ -11315,75 +11321,105 @@ def api_task_level_gantt(payload: dict):
     if not scenario:
         raise HTTPException(status_code=404, detail="Scenario not found for session")
     
-    # Get timeline tasks with dual metrics
-    timeline_tasks = []
-    if "timeline_tasks" in scenario and scenario["timeline_tasks"]:
-        timeline_tasks = scenario["timeline_tasks"]
-    elif "timeline" in scenario and scenario["timeline"]:
-        timeline_tasks = scenario["timeline"].get("tasks", [])
+    project_start_str = scenario.get("project_start", datetime.date.today().isoformat())
+    try:
+        project_start_date = datetime.datetime.fromisoformat(project_start_str.replace('Z', '')).date()
+    except (ValueError, AttributeError):
+        project_start_date = datetime.date.today()
     
-    if not timeline_tasks:
-        # Build from items if no timeline exists
+    # 5.2 PRO Step D: Build ALL WBS rows with proper scheduling
+    all_tasks = []
+    uid_counter = 1
+    wbs_to_uid = {}
+    
+    # Build from WBS if available (contains full L2→L3→L4 hierarchy)
+    wbs_df = scenario.get("wbs_df")
+    if wbs_df is not None and len(wbs_df) > 0:
+        # WBS DataFrame exists - extract full hierarchy
+        if isinstance(wbs_df, pd.DataFrame):
+            for _, row in wbs_df.iterrows():
+                wbs_id = str(row.get("WBS_ID", ""))
+                parent_wbs = str(row.get("Parent_WBS_ID", ""))
+                
+                # Calculate schedule using Duration_Days and Start_Offset_Days (5.2 Pro)
+                offset_days = int(row.get("Start_Offset_Days", 0) or 0)
+                duration_days = max(1, int(row.get("Duration_Days", 1) or 1))
+                planned_hours = float(row.get("Planned_Hours", 0) or 0)
+                
+                # Use business-day math for scheduling
+                start_date = add_business_days(project_start_date, offset_days)
+                finish_date = add_business_days(start_date, duration_days - 1) if duration_days > 1 else start_date
+                
+                uid = uid_counter
+                wbs_to_uid[wbs_id] = uid
+                parent_uid = wbs_to_uid.get(parent_wbs, 0)
+                
+                # Determine level from WBS structure
+                level = wbs_id.count('.') + 1 if wbs_id else 0
+                
+                task = {
+                    "uid": uid,
+                    "parent_uid": parent_uid,
+                    "wbs": wbs_id,
+                    "name": str(row.get("Task_Name", row.get("Task", row.get("Deliverable", "Unknown")))),
+                    "level": level,
+                    "start": start_date.isoformat(),
+                    "finish": finish_date.isoformat(),
+                    "planned_hours": planned_hours,
+                    "duration_business_days": duration_days,
+                    "deliverable_code": str(row.get("Deliverable_Code", "")),
+                    "component": str(row.get("Component", "")),
+                    "is_summary": level < 4  # L2, L3 are summary rows
+                }
+                all_tasks.append(task)
+                uid_counter += 1
+    
+    # Fallback: build from items if no WBS (L2 deliverables only)
+    if not all_tasks:
         items = scenario.get("items", [])
-        for item in items:
+        for idx, item in enumerate(items, 1):
+            planned_hours = float(item.get("planned_hours", item.get("Planned_Hours", 0)) or 0)
+            duration_days = max(1, math.ceil(planned_hours / 8.0)) if planned_hours > 0 else 1
+            
+            # Check for Start_Date override from Gantt
+            start_str = item.get("Start_Date", item.get("start"))
+            if start_str:
+                try:
+                    start_date = datetime.datetime.fromisoformat(start_str.replace('Z', '')[:10]).date()
+                except (ValueError, AttributeError):
+                    start_date = project_start_date
+            else:
+                offset_days = int(item.get("Start_Offset_Days", 0) or 0)
+                start_date = add_business_days(project_start_date, offset_days)
+            
+            finish_date = add_business_days(start_date, duration_days - 1) if duration_days > 1 else start_date
+            
             task = {
-                "deliverable_code": item.get("deliverable_code", ""),
+                "uid": idx,
+                "parent_uid": 0,
+                "wbs": f"1.{idx}",
                 "name": item.get("deliverable", item.get("Deliverable", "")),
                 "level": 2,
-                "effort_hours": float(item.get("planned_hours", item.get("Planned_Hours", 0)) or 0),
-                "duration_days": max(1, math.ceil(float(item.get("planned_hours", item.get("Planned_Hours", 0)) or 0) / 8.0)),
-                "start": scenario.get("project_start", datetime.date.today().isoformat()),
-                "end": scenario.get("project_start", datetime.date.today().isoformat()),
+                "start": start_date.isoformat(),
+                "finish": finish_date.isoformat(),
+                "planned_hours": planned_hours,
+                "duration_business_days": duration_days,
+                "deliverable_code": item.get("deliverable_code", ""),
+                "component": "",
+                "is_summary": True
             }
-            timeline_tasks.append(task)
-    
-    # Ensure all tasks have dual metrics
-    enriched_tasks = []
-    for task in timeline_tasks:
-        enriched = dict(task)
-        
-        # Add effort_hours if missing
-        if 'effort_hours' not in enriched:
-            hours = 0.0
-            for key in ['hours', 'Planned_Hours', 'planned_hours', 'total_hours', 'PlannedHours']:
-                if key in enriched and enriched[key] not in (None, '', 'nan'):
-                    try:
-                        hours = float(enriched[key])
-                        break
-                    except (TypeError, ValueError):
-                        continue
-            enriched['effort_hours'] = hours
-        
-        # Add duration_days if missing
-        if 'duration_days' not in enriched:
-            try:
-                start_str = enriched.get('start', '')
-                end_str = enriched.get('end', '')
-                if start_str and end_str:
-                    start_dt = datetime.datetime.fromisoformat(start_str.replace('Z', '')).date()
-                    end_dt = datetime.datetime.fromisoformat(end_str.replace('Z', '')).date()
-                    duration_days = shared_working_days_between(
-                        datetime.datetime.combine(start_dt, datetime.time(8, 0)),
-                        datetime.datetime.combine(end_dt, datetime.time(17, 0))
-                    )
-                    enriched['duration_days'] = max(1, duration_days)
-                else:
-                    enriched['duration_days'] = max(1, math.ceil(enriched['effort_hours'] / 8.0)) if enriched['effort_hours'] > 0 else 1
-            except (ValueError, AttributeError):
-                enriched['duration_days'] = max(1, math.ceil(enriched['effort_hours'] / 8.0)) if enriched.get('effort_hours', 0) > 0 else 1
-        
-        enriched_tasks.append(enriched)
+            all_tasks.append(task)
     
     return {
         "ok": True,
-        "tasks": enriched_tasks,
-        "task_count": len(enriched_tasks),
+        "tasks": all_tasks,
+        "task_count": len(all_tasks),
         "stretching_enabled": ENABLE_DESCENDANT_STRETCHING,
         "metadata": {
             "source": "unified_schedule",
-            "dual_metrics": True,
-            "effort_hours_label": "Effort (hours)",
-            "duration_days_label": "Duration (business days)"
+            "five_two_pro_compliant": True,
+            "planned_hours_label": "Planned Hours (work)",
+            "duration_business_days_label": "Duration (business days)"
         }
     }
 
@@ -14109,12 +14145,11 @@ def convert_excel_to_mspdi(
                     start_date = datetime.datetime.combine(start_date_only, datetime.time(8, 0))
                     end_date = datetime.datetime.combine(end_date_only, datetime.time(17, 0))
                     
-                    # CRITICAL FIX: Duration = calendar span in 8h-day units (Option C from Architect)
-                    # This prevents Workfront from recalculating dates on import
-                    # Formula: Duration_minutes = ((Finish - Start).days + 1) × 480
+                    # 5.2 PRO FIX Step B/E: Use BUSINESS days for duration, not calendar days
+                    # This ensures DurationMinutes = Duration_Days * 480 regardless of weekends
                     # Work stays as PlannedHours (may differ from Duration - indicates partial allocation)
-                    calendar_days = (end_date_only - start_date_only).days + 1  # Inclusive count
-                    duration_hours = calendar_days * 8.0  # 8-hour working days
+                    business_days = calculate_business_days_between(start_date_only, end_date_only)
+                    duration_hours = business_days * 8.0  # 8-hour working days
                     
                     # Mark this UID as having preserved dates that should not be overwritten by rollup
                     preserved_dates.add(r["UID"])
@@ -14126,9 +14161,17 @@ def convert_excel_to_mspdi(
                 except (ValueError, AttributeError, TypeError) as e:
                     # If parsing fails, fall back to offset calculation and log the issue
                     print(f"[XML EXPORT] ⚠️ Failed to parse Gantt dates for WBS {r['WBS']}: {e}")
-                    start_date = project_start + datetime.timedelta(days=r["StartOffset"])
-                    duration_hours = max(r["Duration"] * hours_per_day, r["PlannedHours"])
-                    end_date = start_date + datetime.timedelta(hours=duration_hours)
+                    # 5.2 PRO FIX Step B: Use Duration_Days to compute Finish, NOT PlannedHours
+                    # PlannedHours goes to <Work> only - does not drive timeline
+                    duration_days = max(1, int(r["Duration"]))
+                    start_date_only = (project_start + datetime.timedelta(days=r["StartOffset"])).date() if isinstance(project_start, datetime.datetime) else project_start + datetime.timedelta(days=r["StartOffset"])
+                    if isinstance(start_date_only, datetime.datetime):
+                        start_date_only = start_date_only.date()
+                    # add_business_days for finish (duration - 1 because start day counts as day 1)
+                    finish_date_only = add_business_days(start_date_only, duration_days - 1) if duration_days > 1 else start_date_only
+                    start_date = datetime.datetime.combine(start_date_only, datetime.time(8, 0))
+                    end_date = datetime.datetime.combine(finish_date_only, datetime.time(17, 0))
+                    duration_hours = duration_days * hours_per_day
             else:
                 # No existing dates - calculate from offsets
                 # Log when deliverables don't have preserved dates (helps diagnose issues)
@@ -14136,6 +14179,11 @@ def convert_excel_to_mspdi(
                 if is_deliverable_level:
                     task_name = r.get("Name", "Unknown")[:30]
                     print(f"[XML EXPORT] ℹ️ No Gantt dates for {task_name} (WBS {r['WBS']}) - using offset calculation")
+                
+                # 5.2 PRO FIX Step B: Use Duration_Days as authoritative for timeline
+                # Compute Finish = Start + (Duration_Days - 1) business days
+                # PlannedHours goes to <Work> only - does not drive timeline
+                duration_days = max(1, int(r["Duration"]))
                 
                 # FIX: If parent has preserved dates from Gantt, calculate relative to parent
                 # Otherwise fall back to global project_start
@@ -14151,17 +14199,23 @@ def convert_excel_to_mspdi(
                     
                     # Calculate offset RELATIVE to parent (subtract parent's offset from this offset)
                     relative_offset = this_offset - parent_offset
-                    start_date = parent_sched["Start"] + datetime.timedelta(days=relative_offset)
-                    
-                    duration_hours = max(r["Duration"] * hours_per_day, r["PlannedHours"])
-                    end_date = start_date + datetime.timedelta(hours=duration_hours)
+                    parent_start_date = parent_sched["Start"].date() if isinstance(parent_sched["Start"], datetime.datetime) else parent_sched["Start"]
+                    start_date_only = add_business_days(parent_start_date, relative_offset)
+                    finish_date_only = add_business_days(start_date_only, duration_days - 1) if duration_days > 1 else start_date_only
+                    start_date = datetime.datetime.combine(start_date_only, datetime.time(8, 0))
+                    end_date = datetime.datetime.combine(finish_date_only, datetime.time(17, 0))
+                    duration_hours = duration_days * hours_per_day
                     
                     print(f"[XML EXPORT] 📍 Row {r['WBS']} ({r.get('TaskName', 'N/A')[:30]}): Parent {parent_wbs} preserved → calculating as parent_start + {relative_offset} days = {start_date.date()}")
                 else:
                     # No preserved parent - use global project_start (original logic)
-                    start_date = project_start + datetime.timedelta(days=r["StartOffset"])
-                    duration_hours = max(r["Duration"] * hours_per_day, r["PlannedHours"])
-                    end_date = start_date + datetime.timedelta(hours=duration_hours)
+                    # 5.2 PRO FIX Step B: Use business-day math for offsets and finish
+                    project_start_date = project_start.date() if isinstance(project_start, datetime.datetime) else project_start
+                    start_date_only = add_business_days(project_start_date, r["StartOffset"])
+                    finish_date_only = add_business_days(start_date_only, duration_days - 1) if duration_days > 1 else start_date_only
+                    start_date = datetime.datetime.combine(start_date_only, datetime.time(8, 0))
+                    end_date = datetime.datetime.combine(finish_date_only, datetime.time(17, 0))
+                    duration_hours = duration_days * hours_per_day
             
             uid_to_sched[r["UID"]] = {
                 "Start": start_date,
@@ -14216,9 +14270,9 @@ def convert_excel_to_mspdi(
                     if isinstance(end_dt, datetime.datetime) and end_dt.hour == 0:
                         end_dt = datetime.datetime.combine(end_dt.date(), datetime.time(17, 0))
                     
-                    # Calculate duration from calendar span
-                    calendar_days = (end_dt.date() - start_dt.date()).days + 1
-                    duration_hours = calendar_days * 8.0
+                    # 5.2 PRO FIX Step B/E: Use BUSINESS days for duration, not calendar days
+                    business_days = calculate_business_days_between(start_dt.date(), end_dt.date())
+                    duration_hours = business_days * 8.0
                     
                     # Override uid_to_sched with compressed timeline dates
                     uid = r["UID"]
@@ -14235,6 +14289,61 @@ def convert_excel_to_mspdi(
                     applied_count += 1
             
             print(f"[XML EXPORT] 📊 Applied compressed timeline to {applied_count} L2 deliverables")
+            
+            # 5.2 PRO FIX Step C: After applying compressed L2 dates, reschedule all children
+            # relative to their deliverable's new start date
+            # This ensures children land inside the deliverable span without stretching
+            print(f"[XML EXPORT] 🔄 Step C: Rescheduling children from deliverable windows")
+            
+            # Build mapping: deliverable WBS -> (new_start, new_end, original_start)
+            l2_schedules = {}
+            for r in rows:
+                outline_level = r["WBS"].count(".") + 1 if r["WBS"] else 0
+                if outline_level == 2 and r["UID"] in compressed_timeline_uids:
+                    # This is a compressed L2 deliverable
+                    l2_schedules[r["WBS"]] = {
+                        "new_start": uid_to_sched[r["UID"]]["Start"],
+                        "new_finish": uid_to_sched[r["UID"]]["Finish"],
+                        "deliverable_offset": r.get("StartOffset", 0),
+                        "uid": r["UID"]
+                    }
+            
+            # Reschedule children based on their relative offset from deliverable start
+            child_reschedule_count = 0
+            for r in rows:
+                outline_level = r["WBS"].count(".") + 1 if r["WBS"] else 0
+                if outline_level <= 2:
+                    continue  # Skip L1 project and L2 deliverables (already handled)
+                
+                # Find parent L2 deliverable for this row
+                parent_l2_wbs = ".".join(r["WBS"].split(".")[:2])  # e.g. "1.1" from "1.1.2.3"
+                
+                if parent_l2_wbs not in l2_schedules:
+                    continue  # Parent wasn't compressed
+                
+                l2_info = l2_schedules[parent_l2_wbs]
+                deliv_start = l2_info["new_start"]
+                deliv_offset = l2_info["deliverable_offset"]
+                
+                # Calculate child's relative offset from deliverable
+                child_offset = r.get("StartOffset", 0) - deliv_offset
+                duration_days = max(1, int(r.get("Duration", 1)))
+                
+                # Reschedule child using business-day math
+                deliv_start_date = deliv_start.date() if isinstance(deliv_start, datetime.datetime) else deliv_start
+                child_start_date = add_business_days(deliv_start_date, child_offset)
+                child_finish_date = add_business_days(child_start_date, duration_days - 1) if duration_days > 1 else child_start_date
+                
+                # Update uid_to_sched with new child schedule
+                child_uid = r["UID"]
+                old_start = uid_to_sched[child_uid]["Start"]
+                uid_to_sched[child_uid]["Start"] = datetime.datetime.combine(child_start_date, datetime.time(8, 0))
+                uid_to_sched[child_uid]["Finish"] = datetime.datetime.combine(child_finish_date, datetime.time(17, 0))
+                uid_to_sched[child_uid]["DurationHours"] = duration_days * 8.0
+                
+                child_reschedule_count += 1
+            
+            print(f"[XML EXPORT] 📊 Step C: Rescheduled {child_reschedule_count} children from deliverable windows")
 
         # Build UID-based children mapping for rollup (as expected by patch)
         wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
