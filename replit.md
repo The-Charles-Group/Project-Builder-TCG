@@ -43,6 +43,10 @@ Preferred communication style: Simple, everyday language.
   - Leaf Tasks (OutlineLevel>=3, Summary=0): Work (hours) + Duration (phase-based business days), Type=0 (Fixed Units)
   - **Phase-Based Task Duration (Dec 2025)**: `PHASE_DEFAULT_DURATIONS` maps phase names to business-day durations (general=5d, internal_review=3d, client_review=10d, qa=2d). Leaf tasks get Duration based on phase name matching; summary tasks and zero-work rows get PT0M.
   - **Assignments Preservation (Dec 2025)**: Assignments block is always emitted with per-role Work values. WORKFRONT CLEANUP no longer strips Assignments element, enabling Assignment Breakdown functionality.
+  - **Resources Preservation (Dec 2025)**: Resources block is now preserved (not deleted) to enable Workfront role mapping. Each resource is one role (no combo resources like "Account Manager,Copywriter").
+  - **Preflight Validation (Dec 2025)**: 6 critical checks before export: Resources exists, Assignments exists, all TaskUIDs valid, all ResourceUIDs valid, all tasks have Start/Finish/Duration, all PredecessorLinks valid.
+  - **Child Task Scheduling (Dec 2025)**: All OutlineLevel >= 3 tasks now get Start/Finish from uid_to_sched or parent-based fallback. Components (Summary=1) emit Duration=PT0M; leaf tasks get phase-based Duration.
+  - **Units Calculation Fix (Dec 2025)**: Changed Units clamp from max(0.05) to max(0.001) to avoid Workfront scheduling explosion from 5% minimum.
   - **Pricing Start Date Alignment (Dec 2025)**: Preserves user's configured pricing start date (`user_pricing_start`) for Project header (StartDate, CurrentDate) and root task ConstraintDate, preventing stale "next_monday" dates from intermediate task calculations. Compressed timeline only updates L2 deliverables, so project-level dates now use the preserved pricing start while project_finish is derived from actual latest task dates.
 - **Parallel Processing**: Utilizes OpenAI Vision API for parallel PDF image processing.
 - **Smart Image Analysis**: Two-tier image processing system with pre-filtering and deep analysis.

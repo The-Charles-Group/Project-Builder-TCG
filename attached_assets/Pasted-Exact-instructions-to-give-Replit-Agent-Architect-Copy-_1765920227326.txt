@@ -1,0 +1,221 @@
+Exact instructions to give Replit Agent + Architect
+
+Copy/paste this whole block.
+
+Goal
+
+Export an MS Project XML that Workfront imports with:
+
+Correct Start / Due dates & durations (business days)
+
+Correct Planned Hours
+
+Assignments column populated
+
+Assignment Breakdown populated
+
+Roles NOT embedded in task titles
+
+Deliverables → Components → Tasks hierarchy preserved
+
+Required implementation changes (non-negotiable)
+1) Always export <Resources> and <Assignments>
+
+In main.py (export function), ensure the final XML always includes:
+
+<Resources> with one <Resource> per role
+
+<Assignments> with one <Assignment> per (task, role) that has hours
+
+Hard rule: if there are roles/hours anywhere in the project data, but <Assignments> is empty → treat as an export failure and stop.
+
+Acceptance test: open the exported XML and verify these strings exist:
+
+<Resources>
+
+<Assignments>
+
+If either is missing, the export is wrong.
+
+2) Resources must be one per role (no “combo” resources)
+
+Do NOT create resources named like:
+
+Account Manager,Copywriter,Strategist
+
+That breaks Workfront role mapping and makes assignments unreliable.
+
+Instead generate resources like:
+
+Account Manager
+
+Copywriter
+
+Strategist
+
+Designer
+
+etc.
+
+Each gets a stable UID.
+
+Pseudo:
+
+unique_roles = sorted(set(role_name for every assignment in project))
+role_to_uid = {role: i+1 for i, role in enumerate(unique_roles)}
+
+
+Create:
+
+<Resources>
+  <Resource>
+    <UID>1</UID>
+    <ID>1</ID>
+    <Name>Account Manager</Name>
+    <Type>1</Type>
+    <MaxUnits>1</MaxUnits>
+    ...
+  </Resource>
+</Resources>
+
+3) Tasks must ALL have Start, Finish, Duration (especially component/task level)
+
+Right now you’re exporting deliverables with dates, but many component/tasks have blank scheduling fields — Workfront then shows 0‑day durations or recalculates unpredictably.
+
+For every task node that Workfront will display (deliverable/component/task):
+
+<Start>
+
+<Finish>
+
+<Duration>
+
+<DurationFormat>
+
+No blanks. Ever.
+
+If the app doesn’t compute task-level dates yet, compute them during export (see #6).
+
+4) Assignments must reference valid TaskUID and ResourceUID
+
+Under <Assignments>:
+
+For each role assignment on a task:
+
+<Assignment>
+  <UID>123</UID>
+  <TaskUID>45</TaskUID>
+  <ResourceUID>3</ResourceUID>
+  <Work>PT180M</Work>
+  <Units>0.125</Units>
+</Assignment>
+
+
+Rules:
+
+TaskUID MUST match an existing <Task><UID>
+
+ResourceUID MUST match an existing <Resource><UID>
+
+Work MUST be in minutes (PT{minutes}M)
+
+5) Stop putting roles in task titles
+
+Task <Name> should be only the label:
+
+client_review
+
+general
+
+internal_review
+
+Roles belong ONLY in <Assignments>.
+
+6) Scheduling: use ONE consistent schedule engine for both App Gantt and XML
+
+This is the only way you’ll stop “matching one place but not the other”.
+
+You need to compute the schedule at the leaf-task level, then roll up to component and deliverable.
+
+Minimum viable scheduling (works even if you don’t have perfect dependencies):
+
+You already know the deliverable span from the app (Start/Finish).
+
+Allocate that span down into components/tasks so children fit inside the parent window.
+
+A practical, deterministic approach:
+
+Within each Deliverable
+
+Compute deliverable working days D
+
+Allocate working days across components proportional to component hours
+
+Within each component allocate working days across tasks proportional to task hours
+
+Chain tasks sequentially inside each component (so it looks like a waterfall)
+
+Roll up component start/finish from tasks
+
+Roll up deliverable start/finish from components (should match app if allocation sums correctly)
+
+That prevents:
+
+“work–wait–work”
+
+tasks inheriting the entire parent span
+
+random gaps
+
+durations drifting from app
+
+7) Units math must be consistent (or Workfront will “do its own thing”)
+
+For each assignment:
+
+Let:
+
+role_hours = hours for that role on that task
+
+task_duration_days = working days for that task
+
+hours_per_day = 8
+
+Then:
+
+Units = role_hours / (task_duration_days * hours_per_day)
+
+Do NOT clamp Units to something like >= 0.05 (5%).
+That clamp is a common reason Workfront/MSP scheduling explodes or shifts dates because it forces inconsistent Work/Duration/Units relationships.
+
+If you must clamp, clamp extremely low like >= 0.001, not 0.05.
+
+Why you saw “Assignments column exists but empty”
+
+Because Workfront is showing the columns, but:
+
+there are no <Assignments>
+
+and/or there are no <Resources>
+
+and/or Assignment.ResourceUID points to resources that don’t exist / aren’t valid roles
+
+and/or child tasks don’t have dates/durations so Workfront collapses them
+
+Quick self-check before you even try importing to Workfront
+
+Tell Replit to add an export preflight that fails loudly if any of these are true:
+
+No <Resources> section
+
+No <Assignments> section
+
+Any <Assignment> references a non-existent TaskUID
+
+Any <Assignment> references a non-existent ResourceUID
+
+Any non-summary task is missing Start/Finish/Duration
+
+Any predecessor points to a missing task UID
+
+This alone will stop the “generic Workfront error message” loop.

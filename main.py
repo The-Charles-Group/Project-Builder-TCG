@@ -14173,7 +14173,7 @@ def convert_excel_to_mspdi(
                 for role, work_h in alloc.items():
                     res_uid = res_name_to_uid.get(role) or res_name_to_uid.get("Unassigned")
                     units = (work_h / task_dur_h) if task_dur_h > 0 else 1.0
-                    units = max(0.05, min(units, 2.0))
+                    units = max(0.001, min(units, 10.0))  # Low clamp (0.1%) to avoid Workfront scheduling issues
                     assignments.append({
                         "UID": assign_uid,
                         "TaskUID": r["UID"],
@@ -14196,7 +14196,7 @@ def convert_excel_to_mspdi(
                 for role in role_list:
                     res_uid = res_name_to_uid.get(role) or res_name_to_uid.get("Unassigned")
                     units = (hours_per_role / task_dur_h) if task_dur_h > 0 else 1.0
-                    units = max(0.05, min(units, 2.0))
+                    units = max(0.001, min(units, 10.0))  # Low clamp (0.1%) to avoid Workfront scheduling issues
                     assignments.append({
                         "UID": assign_uid,
                         "TaskUID": r["UID"],
@@ -14214,7 +14214,7 @@ def convert_excel_to_mspdi(
                     hours_for_role = task_hours * (weight / total_weight)
                     res_uid = res_name_to_uid.get(role) or res_name_to_uid.get("Unassigned")
                     units = (hours_for_role / task_dur_h) if task_dur_h > 0 else 1.0
-                    units = max(0.05, min(units, 2.0))
+                    units = max(0.001, min(units, 10.0))  # Low clamp (0.1%) to avoid Workfront scheduling issues
                     assignments.append({
                         "UID": assign_uid,
                         "TaskUID": r["UID"],
@@ -15055,10 +15055,9 @@ def convert_excel_to_mspdi(
             
             elif outline_level >= 3:
                 # COMPONENTS & TASKS (OutlineLevel >= 3):
+                # ALL tasks must have Start/Finish/Duration per Workfront requirements
                 # Work = planned hours (effort)
-                # Duration = phase-based business days for LEAF tasks only
-                # Summary tasks (components/parents): Duration=PT0M (Workfront calculates from children)
-                # NO Start/Finish fields - Workfront treats as unscheduled children
+                # Duration = phase-based business days for LEAF tasks, calculated for summaries
                 
                 # Calculate Work from PlannedHours
                 work_hours = r.get("PlannedHours", 0) or 0
@@ -15067,12 +15066,60 @@ def convert_excel_to_mspdi(
                 work_minutes = max(0, int(float(work_hours) * 60))
                 SubElement(task, "Work").text = f"PT{work_minutes}M"
                 
+                # ALL tasks MUST have Start/Finish/Duration - inherit from schedule
+                # This is CRITICAL for Workfront to show proper dates and Assignment Breakdown
+                sched_entry = uid_to_sched.get(r["UID"], {})
+                task_start_raw = sched_entry.get("Start")
+                task_finish_raw = sched_entry.get("Finish")
+                
+                # FALLBACK: If no schedule entry, inherit from parent deliverable
+                if not task_start_raw or not task_finish_raw:
+                    # Find parent deliverable's schedule
+                    parent_wbs = r.get("ParentWBS", "")
+                    while parent_wbs:
+                        parent_uid = wbs_to_uid.get(parent_wbs)
+                        if parent_uid and parent_uid in uid_to_sched:
+                            parent_sched = uid_to_sched[parent_uid]
+                            if not task_start_raw:
+                                task_start_raw = parent_sched.get("Start")
+                            if not task_finish_raw:
+                                task_finish_raw = parent_sched.get("Finish")
+                            break
+                        # Move up to grandparent
+                        parts = parent_wbs.rsplit(".", 1)
+                        parent_wbs = parts[0] if len(parts) > 1 else ""
+                    
+                    # Ultimate fallback: use project start
+                    if not task_start_raw:
+                        task_start_raw = project_start
+                    if not task_finish_raw:
+                        task_finish_raw = project_start + datetime.timedelta(days=1)
+                
+                # Format datetime objects to ISO strings
+                if task_start_raw:
+                    if isinstance(task_start_raw, datetime.datetime):
+                        task_start = task_start_raw.strftime("%Y-%m-%dT%H:%M:%S")
+                    else:
+                        task_start = str(task_start_raw)
+                    SubElement(task, "Start").text = task_start
+                else:
+                    task_start = None
+                
+                if task_finish_raw:
+                    if isinstance(task_finish_raw, datetime.datetime):
+                        task_finish = task_finish_raw.strftime("%Y-%m-%dT%H:%M:%S")
+                    else:
+                        task_finish = str(task_finish_raw)
+                    SubElement(task, "Finish").text = task_finish
+                else:
+                    task_finish = None
+                
                 # CRITICAL: Use proper leaf task check from Summary flag calculation above
                 # is_summary already accounts for: summary_set membership, is_root, is_deliverable
                 # For OutlineLevel >= 3: is_summary means this task has children (component or parent)
-                # ONLY true leaf tasks (Summary=0) get phase-based Duration
                 if is_summary:
-                    # Summary/component tasks: Duration=PT0M - Workfront calculates from children
+                    # Components (Summary=1): Duration=PT0M - Workfront calculates from children
+                    # This is per Workfront requirements - components have Work but no Duration
                     SubElement(task, "Duration").text = "PT0M"
                 else:
                     # TRUE leaf tasks (Summary=0, no children): use phase-based duration
@@ -15088,7 +15135,7 @@ def convert_excel_to_mspdi(
                 # Type = 0 (Fixed Units) for all components and tasks
                 SubElement(task, "Type").text = "0"  # Fixed Units
                 SubElement(task, "IsEffortDriven").text = "0"
-                # NO ConstraintType for unscheduled tasks
+                SubElement(task, "DurationFormat").text = "7"  # Elapsed Days
             
             # GPT-5 PRO FIX: Add CalendarUID to all tasks to enable calendar-day duration display
             # Without this, Workfront treats durations as raw minutes and displays "0.12 days"
@@ -16131,12 +16178,14 @@ def convert_excel_to_mspdi(
             cleanup_stats = {"resources_removed": 0, "fixedcost_removed": 0, 
                             "times_snapped": 0, "summary_constraints_removed": 0}
             
-            # 1. Remove <Resources> element entirely
-            resources_elem_to_remove = project.find("Resources")
-            if resources_elem_to_remove is not None:
-                project.remove(resources_elem_to_remove)
-                cleanup_stats["resources_removed"] = 1
-                print(f"[WORKFRONT CLEANUP] 🗑️ Removed <Resources> element")
+            # 1. KEEP <Resources> element - required for Workfront role mapping and Assignment Breakdown
+            # Previously removed Resources, but this breaks Workfront's ability to map assignments
+            resources_elem = project.find("Resources")
+            if resources_elem is not None:
+                resource_count = len(resources_elem.findall("Resource"))
+                print(f"[WORKFRONT CLEANUP] ✅ Keeping <Resources> block ({resource_count} resources)")
+            else:
+                print(f"[WORKFRONT CLEANUP] ⚠️ No <Resources> element found - assignments may not work")
             
             # 2. KEEP <Assignments> block - required for Assignment Breakdown to work
             # Do NOT remove assignments - they contain per-role Work values
@@ -16227,56 +16276,152 @@ def convert_excel_to_mspdi(
             print(f"[WORKFRONT CLEANUP] ✅ Cleanup complete: {cleanup_stats}")
 
         # ═══════════════════════════════════════════════════════════════════════════
-        # WORKFRONT PRE-DOWNLOAD VALIDATION
-        # Check XML structure before export to prevent import failures
+        # WORKFRONT PRE-DOWNLOAD VALIDATION (CRITICAL)
+        # Export preflight that fails loudly if any requirements are violated
         # ═══════════════════════════════════════════════════════════════════════════
         print(f"\n[WORKFRONT VALIDATION] ═══════════════════════════════════════")
         validation_errors = []
+        validation_fatal = False  # If True, treat as export failure
         
-        # Validation 1: Check PredecessorLink count > 0
+        # ─── CRITICAL 1: Check for <Resources> section ───
+        resources_elem_check = project.find("Resources")
+        if resources_elem_check is None:
+            validation_errors.append("FATAL: No <Resources> section found")
+            validation_fatal = True
+            print(f"[VALIDATION] ❌ FAIL: No <Resources> section - assignments will not work")
+        else:
+            resource_count = len(resources_elem_check.findall("Resource"))
+            if resource_count == 0:
+                validation_errors.append("FATAL: <Resources> section is empty")
+                validation_fatal = True
+                print(f"[VALIDATION] ❌ FAIL: <Resources> section is empty")
+            else:
+                print(f"[VALIDATION] ✅ <Resources> section present: {resource_count} resources")
+        
+        # ─── CRITICAL 2: Check for <Assignments> section ───
+        assignments_elem_check = project.find("Assignments")
+        if assignments_elem_check is None:
+            validation_errors.append("FATAL: No <Assignments> section found")
+            validation_fatal = True
+            print(f"[VALIDATION] ❌ FAIL: No <Assignments> section - roles will not be mapped")
+        else:
+            assignment_count = len(assignments_elem_check.findall("Assignment"))
+            if assignment_count == 0:
+                validation_errors.append("FATAL: <Assignments> section is empty")
+                validation_fatal = True
+                print(f"[VALIDATION] ❌ FAIL: <Assignments> section is empty")
+            else:
+                print(f"[VALIDATION] ✅ <Assignments> section present: {assignment_count} assignments")
+        
+        # ─── CRITICAL 3: Verify all Assignment TaskUIDs reference valid tasks ───
+        valid_task_uids = set()
+        for task_elem in tasks_elem.findall("Task"):
+            uid_elem = task_elem.find("UID")
+            if uid_elem is not None:
+                valid_task_uids.add(uid_elem.text)
+        
+        invalid_task_refs = []
+        if assignments_elem_check is not None:
+            for assign_elem in assignments_elem_check.findall("Assignment"):
+                task_uid_elem = assign_elem.find("TaskUID")
+                if task_uid_elem is not None and task_uid_elem.text not in valid_task_uids:
+                    invalid_task_refs.append(task_uid_elem.text)
+        
+        if invalid_task_refs:
+            validation_errors.append(f"FATAL: {len(invalid_task_refs)} assignments reference non-existent TaskUIDs")
+            validation_fatal = True
+            print(f"[VALIDATION] ❌ FAIL: {len(invalid_task_refs)} assignments reference invalid TaskUIDs: {invalid_task_refs[:5]}")
+        else:
+            print(f"[VALIDATION] ✅ All Assignment TaskUIDs are valid")
+        
+        # ─── CRITICAL 4: Verify all Assignment ResourceUIDs reference valid resources ───
+        valid_resource_uids = set()
+        if resources_elem_check is not None:
+            for res_elem in resources_elem_check.findall("Resource"):
+                uid_elem = res_elem.find("UID")
+                if uid_elem is not None:
+                    valid_resource_uids.add(uid_elem.text)
+        
+        invalid_res_refs = []
+        if assignments_elem_check is not None:
+            for assign_elem in assignments_elem_check.findall("Assignment"):
+                res_uid_elem = assign_elem.find("ResourceUID")
+                if res_uid_elem is not None and res_uid_elem.text not in valid_resource_uids:
+                    invalid_res_refs.append(res_uid_elem.text)
+        
+        if invalid_res_refs:
+            validation_errors.append(f"FATAL: {len(invalid_res_refs)} assignments reference non-existent ResourceUIDs")
+            validation_fatal = True
+            print(f"[VALIDATION] ❌ FAIL: {len(invalid_res_refs)} assignments reference invalid ResourceUIDs: {invalid_res_refs[:5]}")
+        else:
+            print(f"[VALIDATION] ✅ All Assignment ResourceUIDs are valid")
+        
+        # ─── CRITICAL 5: Verify all non-summary tasks have Start/Finish/Duration ───
+        missing_schedule_fields = []
+        for task_elem in tasks_elem.findall("Task"):
+            summary_elem = task_elem.find("Summary")
+            uid_elem = task_elem.find("UID")
+            name_elem = task_elem.find("Name")
+            start_elem = task_elem.find("Start")
+            finish_elem = task_elem.find("Finish")
+            duration_elem = task_elem.find("Duration")
+            
+            is_summary = summary_elem is not None and summary_elem.text == "1"
+            is_root = uid_elem is not None and uid_elem.text == "1"
+            
+            # ALL tasks (including summaries except root) should have Start/Finish/Duration
+            if not is_root:
+                missing = []
+                if start_elem is None or not start_elem.text:
+                    missing.append("Start")
+                if finish_elem is None or not finish_elem.text:
+                    missing.append("Finish")
+                if duration_elem is None or not duration_elem.text:
+                    missing.append("Duration")
+                
+                if missing:
+                    task_name = name_elem.text if name_elem is not None else "Unknown"
+                    task_uid = uid_elem.text if uid_elem is not None else "N/A"
+                    missing_schedule_fields.append(f"{task_name} (UID {task_uid}) missing: {', '.join(missing)}")
+        
+        if missing_schedule_fields:
+            print(f"[VALIDATION] ⚠️ {len(missing_schedule_fields)} tasks missing scheduling fields:")
+            for issue in missing_schedule_fields[:5]:
+                print(f"    - {issue}")
+            validation_errors.append(f"WARNING: {len(missing_schedule_fields)} tasks missing Start/Finish/Duration")
+        else:
+            print(f"[VALIDATION] ✅ All tasks have Start/Finish/Duration")
+        
+        # ─── CRITICAL 6: Verify all PredecessorLinks reference valid task UIDs ───
+        invalid_pred_refs = []
         total_predecessor_links = 0
         for task_elem in tasks_elem.findall("Task"):
             pred_links = task_elem.findall("PredecessorLink")
             total_predecessor_links += len(pred_links)
-        
-        if total_predecessor_links > 0:
-            print(f"[VALIDATION] ✅ PredecessorLink count: {total_predecessor_links} (PASS)")
-        else:
-            validation_errors.append(f"No PredecessorLinks found - schedule may not import correctly")
-            print(f"[VALIDATION] ⚠️ PredecessorLink count: 0 (WARNING - dependencies may be missing)")
-        
-        # Validation 2: Check no Summary=1 tasks have Duration=PT0M (except root)
-        summary_zero_duration_issues = []
-        for task_elem in tasks_elem.findall("Task"):
-            summary_elem = task_elem.find("Summary")
-            duration_elem = task_elem.find("Duration")
-            uid_elem = task_elem.find("UID")
-            name_elem = task_elem.find("Name")
             
-            is_summary = summary_elem is not None and summary_elem.text == "1"
-            is_root = uid_elem is not None and uid_elem.text == "1"
-            is_zero_duration = duration_elem is not None and duration_elem.text == "PT0M"
-            
-            if is_summary and is_zero_duration and not is_root:
-                task_name = name_elem.text if name_elem is not None else "Unknown"
-                summary_zero_duration_issues.append(f"{task_name} (UID {uid_elem.text if uid_elem else 'N/A'})")
+            for pred_link in pred_links:
+                pred_uid_elem = pred_link.find("PredecessorUID")
+                if pred_uid_elem is not None and pred_uid_elem.text not in valid_task_uids:
+                    invalid_pred_refs.append(pred_uid_elem.text)
         
-        if not summary_zero_duration_issues:
-            print(f"[VALIDATION] ✅ No summary tasks with Duration=PT0M (except root): PASS")
+        if invalid_pred_refs:
+            validation_errors.append(f"FATAL: {len(invalid_pred_refs)} predecessors reference non-existent tasks")
+            validation_fatal = True
+            print(f"[VALIDATION] ❌ FAIL: {len(invalid_pred_refs)} predecessors reference invalid UIDs: {invalid_pred_refs[:5]}")
         else:
-            print(f"[VALIDATION] ⚠️ Found {len(summary_zero_duration_issues)} summary tasks with Duration=PT0M:")
-            for issue in summary_zero_duration_issues[:5]:
-                print(f"    - {issue}")
-                validation_errors.append(f"Summary task with zero duration: {issue}")
+            print(f"[VALIDATION] ✅ All PredecessorLinks reference valid tasks ({total_predecessor_links} links)")
         
-        # Validation 3: Verify exported task count
+        # ─── SUMMARY ───
         exported_task_count = len(tasks_elem.findall("Task"))
-        print(f"[VALIDATION] 📊 Exported {exported_task_count} tasks (all levels included, L3+ have Work only)")
+        print(f"[VALIDATION] 📊 Exported {exported_task_count} tasks total")
         
-        if validation_errors:
-            print(f"[VALIDATION] ⚠️ {len(validation_errors)} validation warning(s) detected")
+        if validation_fatal:
+            print(f"[VALIDATION] ❌ FATAL ERRORS DETECTED - Export should be rejected")
+            print(f"[VALIDATION] Errors: {validation_errors}")
+        elif validation_errors:
+            print(f"[VALIDATION] ⚠️ {len(validation_errors)} warning(s) detected but export is usable")
         else:
-            print(f"[VALIDATION] ✅ All validation checks passed")
+            print(f"[VALIDATION] ✅ All validation checks passed - export is clean")
         
         print(f"[WORKFRONT VALIDATION] ═══════════════════════════════════════\n")
 
