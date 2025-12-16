@@ -37,24 +37,12 @@ import hashlib
 import time
 from functools import lru_cache
 import pickle
-from scheduling_calendar import (
-    working_minutes_between as shared_working_minutes_between,
-    working_days_between as shared_working_days_between,
-    add_working_minutes, add_working_days,
-    is_business_day, get_next_business_day,
-    format_mspdi_duration, format_mspdi_work,
-    get_mspdi_dates, schedule_sequential_tasks,
-    MINUTES_PER_DAY, HOURS_PER_DAY
-)
 
 # ============================================================
 # FEATURE FLAGS
 # ============================================================
 ENABLE_WBS_DEPENDENCIES = True  # Use WBS Dependencies column instead of scheduler edges
 ENABLE_MULTI_ASSIGNMENT = True  # Group roles into multi-assignment tasks
-STRIP_ASSIGNMENTS_FOR_WF = False  # When True, removes Resources/Assignments from XML (legacy Workfront behavior)
-PHASE_WINDOW_ENABLED = os.getenv("PHASE_WINDOW_ENABLED", "true").lower() == "true"  # Split components into general/internal_review/client_review phases
-ENABLE_DESCENDANT_STRETCHING = os.getenv("ENABLE_DESCENDANT_STRETCHING", "true").lower() == "true"  # When True, stretches leaf tasks to fill deliverable windows (Workfront rollup match)
 # ROLLBACK: Set both to False to restore legacy behavior (scheduler edges, one task per role)
 
 # ============================================================
@@ -4780,10 +4768,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                                     nested_task_data = nt
                                     break
                         
-                        # 5.2 PRO FIX Step A: Use duration_by_tg/offset_by_tg for ALL paths (nested AND legacy)
-                        # Never default to dur=1 - always honor the schedule-derived duration
-                        dur = int(duration_by_tg.get(tg, 1))
-                        
+                        dur = int(duration_by_tg.get(tg, 1)) if not use_nested_path else 1
                         if use_nested_path:
                             label_core = tg  # Task label is already in tg
                         else:
@@ -4796,32 +4781,48 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                         task_ordinal = (month_idx-1)*total_tasks_per_month + k
                         wbs_task = f"{wbs_comp}.{task_ordinal}"
 
-                        # 5.2 PRO FIX Step A: Use offset_by_tg for ALL paths (nested AND legacy)
-                        # Never default to base_offset=dstart - always use proper task group offsets
-                        base_offset = dstart + offset_by_tg.get(tg, 0) + ((month_idx-1) * total_deliv_duration)
+                        if use_nested_path:
+                            base_offset = dstart  # Simplified for nested
+                        else:
+                            base_offset = dstart + offset_by_tg.get(tg, 0) + ((month_idx-1) * total_deliv_duration)
+
+                        # ZERO COST: All cost comes from deliverable FixedCost
+                        rows.append({
+                            "Row_ID": nested_task_data.get("row_id", "") if nested_task_data else "",
+                            "Deliverable_Code": dcode, 
+                            "Task_Code": nested_task_data.get("task_code", "") if nested_task_data else "",
+                            "Service_Department": svc_comp,
+                            "Deliverable": deliv_label,
+                            "Project_Name": project_name, "WBS_ID": wbs_task, "Parent_WBS_ID": wbs_comp,
+                            "Task_Name": label, "Component": comp, "Task": label,
+                            "Role": "", "Seniority": "",
+                            "Planned_Hours": "",   # stays on role rows
+                            "Start_Offset_Days": base_offset,
+                            "Duration_Days": dur,
+                            "Dependencies": (wbs_comp if (k==1 and month_idx==1) else (prev_task_last_wbs if k>1 else prev_month_last_wbs)),
+                            "Assignee_External_ID": "", "Notes": "",
+                            "Rate_USD": 0,  # Cost comes from FixedCost only
+                            "Price_USD": 0,  # Cost comes from FixedCost only
+                            "FixedCost": 0   # No FixedCost on tasks - only on deliverable
+                        })
 
                         # ============================================================
-                        # Build role assignments FIRST (for MSP Assignment export)
-                        # 3-LEVEL HIERARCHY REFACTOR: No longer creating L5 role subtask rows
-                        # Instead, assignments are stored as JSON metadata on the L4 task row
+                        # Role/Assignment rows for this task
+                        # Nested path uses assignments from task; legacy uses DB lookup
                         # ============================================================
                         target_task_hours = int(tg_target.get(tg, 0))
-                        task_assignments = []  # List of {role, seniority, hours} for MSP Assignments
                         
                         if use_nested_path and nested_task_data and nested_task_data.get("assignments"):
                             # NESTED PATH: Use assignments from task structure
                             assignments = nested_task_data.get("assignments", [])
+                            flo = {}
                             for asgn in assignments:
                                 role = asgn.get("role", "")
                                 sen = asgn.get("seniority", "Mid")
                                 hrs = float(asgn.get("allocation_hours", 0))
                                 if hrs > 0:
-                                    task_assignments.append({
-                                        "role": role,
-                                        "seniority": sen,
-                                        "hours": int(round(hrs))
-                                    })
-                            print(f"[WBS Builder] Using NESTED assignments for {dcode}/{comp}/{tg}: {len(task_assignments)} assignments")
+                                    flo[(role, sen)] = int(round(hrs))
+                            print(f"[WBS Builder] Using NESTED assignments for {dcode}/{comp}/{tg}: {len(assignments)} assignments")
                         else:
                             # LEGACY PATH: Use DB lookup for role hours
                             hrs_role_df = DB.hours_by_role_for_component_task(dcode, comp, tg, scen_col)
@@ -4837,52 +4838,52 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                             order = sorted(raw_map.keys(), key=lambda kk: (raw_scaled[kk]-flo[kk]), reverse=True)
                             for kk in order[:max(0, rem)]:
                                 flo[kk] += 1
-                            
-                            # Convert to assignment list format
-                            for (role, sen), h in flo.items():
-                                if h > 0:
-                                    task_assignments.append({
-                                        "role": role or "",
-                                        "seniority": sen or "",
-                                        "hours": int(h)
-                                    })
                         
                         # Debug logging for retainer role allocation
                         if is_monthly_retainer:
-                            role_sum = sum(a["hours"] for a in task_assignments)
+                            role_sum = sum(flo.values())
                             print(f"[RETAINER DEBUG] {dcode}/{comp}/{tg}: target_task_hours={target_task_hours}, role_sum={role_sum}")
 
-                        # Calculate total hours from all assignments for this task
-                        total_task_hours = sum(a["hours"] for a in task_assignments) if task_assignments else target_task_hours
-                        
-                        # Extract role list for backwards compatibility with RoleList/RoleStr fields
-                        role_list = [a["role"] for a in task_assignments if a["role"]]
-                        
-                        # ZERO COST: All cost comes from deliverable FixedCost
-                        # 3-LEVEL HIERARCHY: Task row (L4) is now a leaf with hours and assignments
-                        rows.append({
-                            "Row_ID": nested_task_data.get("row_id", "") if nested_task_data else "",
-                            "Deliverable_Code": dcode, 
-                            "Task_Code": nested_task_data.get("task_code", "") if nested_task_data else "",
-                            "Service_Department": svc_comp,
-                            "Deliverable": deliv_label,
-                            "Project_Name": project_name, "WBS_ID": wbs_task, "Parent_WBS_ID": wbs_comp,
-                            "Task_Name": label, "Component": comp, "Task": label,
-                            "Role": ",".join(role_list) if role_list else "",  # Comma-separated for multi-role
-                            "Seniority": "",  # Mixed seniorities handled in Assignments
-                            "Planned_Hours": total_task_hours,  # Total hours on leaf task
-                            "Start_Offset_Days": base_offset,
-                            "Duration_Days": dur,
-                            "Dependencies": (wbs_comp if (k==1 and month_idx==1) else (prev_task_last_wbs if k>1 else prev_month_last_wbs)),
-                            "Assignee_External_ID": "", "Notes": "",
-                            "Rate_USD": 0,  # Cost comes from FixedCost only
-                            "Price_USD": 0,  # Cost comes from FixedCost only
-                            "FixedCost": 0,   # No FixedCost on tasks - only on deliverable
-                            "Assignments_JSON": json.dumps(task_assignments) if task_assignments else ""  # MSP Assignment metadata
-                        })
+                        prev_role_wbs = ""
+                        r_index = 0
+                        for (role, sen), h in flo.items():
+                            if h <= 0:
+                                continue
+                            r_index += 1
+                            if use_nested_path:
+                                row_id = ""
+                                task_code = nested_task_data.get("task_code", "") if nested_task_data else ""
+                                svc_task = svc_comp
+                            else:
+                                row_id, task_code, svc_task_v2 = DB.codes_for_component_task_role(dcode, comp, tg, role or "", sen or "", scen_col)
+                                # Prefer v3 service_department_for_task (no scen_col dependency)
+                                svc_task = DB.service_department_for_task(dcode, comp, tg) or svc_task_v2
+                            wbs_role = f"{wbs_task}.{r_index}"
 
-                        # 3-LEVEL HIERARCHY: Task is now the leaf - no role subtask rows created
-                        prev_task_last_wbs = wbs_task
+                            row_hours = int(h)
+                            
+                            # ZERO COST: All cost comes from deliverable FixedCost
+                            # Role rows only carry hours for XML Work, not cost
+                            rows.append({
+                                "Row_ID": row_id,
+                                "Deliverable_Code": dcode,
+                                "Task_Code": task_code,
+                                "Service_Department": (svc_task or svc_comp),
+                                "Deliverable": deliv_label,
+                                "Project_Name": project_name, "WBS_ID": wbs_role, "Parent_WBS_ID": wbs_task,
+                                "Task_Name": label, "Component": comp, "Task": label,
+                                "Role": role or "", "Seniority": sen or "",
+                                "Planned_Hours": row_hours,
+                                "Start_Offset_Days": "", "Duration_Days": "",
+                                "Dependencies": wbs_task if r_index == 1 else prev_role_wbs,
+                                "Assignee_External_ID": "", "Notes": "",
+                                "Rate_USD": 0,  # Cost comes from FixedCost only
+                                "Price_USD": 0,  # Cost comes from FixedCost only
+                                "FixedCost": 0   # No FixedCost on role rows - only on deliverable
+                            })
+                            prev_role_wbs = wbs_role
+
+                        prev_task_last_wbs = prev_role_wbs or wbs_task
 
                     prev_month_last_wbs = prev_task_last_wbs
 
@@ -4893,14 +4894,14 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             prev_deliv_wbs = wbs_deliv
 
     # ========================================================================
-    # HOURS HARMONIZATION PASS: Ensure leaf task rows sum exactly to target
+    # HOURS HARMONIZATION PASS: Ensure leaf role rows sum exactly to target
     # ========================================================================
-    # 3-LEVEL HIERARCHY: Leaf tasks are now L4 (task rows with Planned_Hours > 0)
-    # No longer looking for L5 role rows - they don't exist anymore
+    # After building all rows, harmonize leaf hours per deliverable to match Step 3 target
+    # This fixes rounding drift where e.g. 200 hours target becomes 210 in leaf sum
     
-    # Group rows by deliverable and find leaf task rows (L4 tasks with positive hours)
+    # Group rows by deliverable and find leaf role rows (highest outline level under each deliverable)
     deliverable_target_hours = {}  # dcode -> target hours from Step 3
-    deliverable_leaf_rows = {}     # dcode -> list of row indices that are leaf task rows
+    deliverable_leaf_rows = {}     # dcode -> list of row indices that are leaf role rows
     
     for d in items:
         dcode = d.get("deliverable_code") or d.get("code") or ""
@@ -4910,16 +4911,12 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             deliverable_target_hours[dcode] = target_hours
             deliverable_leaf_rows[dcode] = []
     
-    # Find leaf task rows for each deliverable (L4 tasks with Planned_Hours > 0)
+    # Find leaf role rows for each deliverable (rows with Role set and Planned_Hours > 0)
     for i, row in enumerate(rows):
         dcode = row.get("Deliverable_Code", "")
         if dcode in deliverable_target_hours:
-            # 3-LEVEL HIERARCHY: Leaf tasks are L4 (WBS has 3 dots: 1.1.1.1)
-            wbs = row.get("WBS_ID", "")
-            outline_level = wbs.count('.') + 1 if wbs else 0
-            is_leaf_task = outline_level == 4  # L4 = Deliverable.Component.Task
-            
-            if is_leaf_task and row.get("Planned_Hours") and int(row.get("Planned_Hours", 0)) > 0:
+            # Leaf role rows have a Role assigned and positive hours
+            if row.get("Role") and row.get("Planned_Hours") and int(row.get("Planned_Hours", 0)) > 0:
                 deliverable_leaf_rows[dcode].append(i)
     
     # Harmonize each deliverable's leaf hours to match target
@@ -6406,29 +6403,26 @@ class WeightedScoresRequest(BaseModel):
 DELIVERABLE_BUFFER_WORK_DAYS = int(os.environ.get("DELIVERABLE_BUFFER_WORK_DAYS", "0"))
 
 def add_business_days(start_date: datetime.date, business_days: int) -> datetime.date:
-    """Add business days (Mon-Fri) to a start date, skipping weekends.
-    
-    Uses shared scheduling_calendar module for single source of truth.
-    """
-    # Convert date to datetime at 9:00 AM for the shared function
-    start_dt = datetime.datetime.combine(start_date, datetime.time(9, 0))
-    result_dt = add_working_days(start_dt, float(business_days))
-    return result_dt.date()
+    """Add business days (Mon-Fri) to a start date, skipping weekends."""
+    current = start_date
+    days_added = 0
+    while days_added < business_days:
+        current += datetime.timedelta(days=1)
+        if current.weekday() < 5:
+            days_added += 1
+    return current
 
 def calculate_business_days_between(start_date: datetime.date, end_date: datetime.date) -> int:
-    """Calculate the number of business days between two dates (inclusive of end).
-    
-    Uses shared scheduling_calendar module for single source of truth.
-    """
+    """Calculate the number of business days between two dates (inclusive of end)."""
     if end_date < start_date:
         return 0
-    # Convert dates to datetimes (full day span) for the shared function
-    start_dt = datetime.datetime.combine(start_date, datetime.time(9, 0))
-    end_dt = datetime.datetime.combine(end_date, datetime.time(17, 0))
-    # Get working minutes and convert to days
-    working_minutes = shared_working_minutes_between(start_dt, end_dt)
-    working_days = working_minutes / MINUTES_PER_DAY
-    return max(1, int(round(working_days)))
+    days = 0
+    current = start_date
+    while current <= end_date:
+        if current.weekday() < 5:
+            days += 1
+        current += datetime.timedelta(days=1)
+    return max(1, days)
 
 def compress_deliverable_timeline(
     tasks: List[Dict[str, Any]],
@@ -6612,14 +6606,68 @@ def compress_deliverable_timeline(
         
         compressed_tasks.append(new_task)
     
-    # TICKET B: Descendant stretching - controlled by ENABLE_DESCENDANT_STRETCHING flag
-    # When enabled: Stretches leaf tasks to fill deliverable windows (Workfront rollup match)
-    # When disabled: Parents derive dates from children via bottom-up rollup
-    if ENABLE_DESCENDANT_STRETCHING:
-        print(f"[Compress TICKET B] ENABLED - will stretch descendants to fill deliverable windows")
-        # Note: Actual stretching happens in convert_excel_to_mspdi via stretch_and_clamp_descendants()
-    else:
-        print(f"[Compress TICKET B] DISABLED - using bottom-up rollup via effort-based waterfall scheduler")
+    # TICKET B: Extend boundary children to span the full deliverable window
+    # This is critical for Workfront: summary task duration is computed from children,
+    # so we must ensure at least one child starts on new_start and one ends on new_end
+    # This must happen AFTER the shift loop to avoid double-shifting
+    
+    # Build a map of children by deliverable_code from compressed_tasks
+    compressed_children_by_deliv: Dict[str, List[dict]] = {}
+    for task in compressed_tasks:
+        deliv_code = task.get('deliverable_code', '')
+        parent_code = task.get('parent_deliverable_code', '') or task.get('parent_code', '')
+        # A task is a child if it has a parent reference OR if it's a component/task level item
+        task_level = task.get('level', 0)
+        if task_level > 2 or (parent_code and parent_code in compression_map):
+            effective_parent = parent_code if parent_code else deliv_code
+            if effective_parent in compression_map:
+                compressed_children_by_deliv.setdefault(effective_parent, []).append(task)
+    
+    # Extend boundary children for each deliverable
+    for code, mapping in compression_map.items():
+        children = compressed_children_by_deliv.get(code, [])
+        if not children:
+            print(f"[Compress TICKET B] {code}: No children found in compressed_tasks")
+            continue
+        
+        new_start_dt = datetime.datetime.fromisoformat(mapping['new_start']).date()
+        new_end_dt = datetime.datetime.fromisoformat(mapping['new_end']).date()
+        
+        print(f"[Compress TICKET B] {code}: Aligning {len(children)} children to span {new_start_dt} -> {new_end_dt}")
+        
+        # Find valid (non-milestone) children with start/end dates
+        valid_children_with_dates = []
+        for child in children:
+            is_milestone = child.get('is_milestone', False) or child.get('name', '').lower().endswith('approval')
+            if is_milestone:
+                continue
+            child_start = child.get('start', '')
+            child_end = child.get('end', '')
+            if child_start and child_end:
+                try:
+                    start_dt = datetime.datetime.fromisoformat(child_start.replace('Z', '')).date()
+                    end_dt = datetime.datetime.fromisoformat(child_end.replace('Z', '')).date()
+                    valid_children_with_dates.append((child, start_dt, end_dt))
+                except (ValueError, AttributeError):
+                    continue
+        
+        if not valid_children_with_dates:
+            print(f"[Compress TICKET B] {code}: No valid non-milestone children found, skipping alignment")
+            continue
+        
+        # Find earliest-starting and latest-ending children
+        earliest_child, earliest_start, _ = min(valid_children_with_dates, key=lambda x: x[1])
+        latest_child, _, latest_end = max(valid_children_with_dates, key=lambda x: x[2])
+        
+        # Set earliest child's start to new_start
+        if earliest_start != new_start_dt:
+            print(f"[Compress TICKET B] Set earliest child '{earliest_child.get('name', '')[:40]}' start: {earliest_start} -> {new_start_dt}")
+            earliest_child['start'] = new_start_dt.isoformat()
+        
+        # Set latest child's end to new_end
+        if latest_end != new_end_dt:
+            print(f"[Compress TICKET B] Set latest child '{latest_child.get('name', '')[:40]}' end: {latest_end} -> {new_end_dt}")
+            latest_child['end'] = new_end_dt.isoformat()
     
     metadata = {
         "compressed": True,
@@ -6633,243 +6681,6 @@ def compress_deliverable_timeline(
     print(f"[Compress] Compression complete: {len(compression_map)} deliverables chained")
     
     return compressed_tasks, metadata
-
-
-def apply_effort_based_waterfall_scheduling(
-    tasks: List[Dict[str, Any]],
-    project_start: str = None
-) -> List[Dict[str, Any]]:
-    """
-    Apply effort-based waterfall scheduling per the FINAL SCHEDULING RULESET.
-    
-    This implements:
-    1. Task-level scheduling: duration = ceil(hours/8) business days
-    2. Waterfall sequencing per component: general → internal_review → client_review → qa
-    3. FS dependencies between phases (no overlaps)
-    4. Bottom-up rollup: deliverables/components derive dates from children
-    
-    Args:
-        tasks: List of timeline tasks with hours/effort data
-        project_start: ISO date for project start
-    
-    Returns:
-        Updated tasks with effort-based dates and FS predecessors
-    """
-    if not PHASE_WINDOW_ENABLED:
-        print(f"[EFFORT-WATERFALL] Disabled via PHASE_WINDOW_ENABLED=false")
-        return tasks
-    
-    print(f"[EFFORT-WATERFALL] Applying effort-based waterfall scheduling to {len(tasks)} tasks")
-    
-    # Phase order for waterfall sequencing
-    PHASE_ORDER = ["general", "internal_review", "client_review", "qa"]
-    
-    def classify_task_phase(task_name: str) -> str:
-        """Classify task into waterfall phase based on name."""
-        name_lower = task_name.lower()
-        if 'qa' in name_lower or 'quality' in name_lower:
-            return 'qa'
-        elif 'client' in name_lower:
-            return 'client_review'
-        elif 'internal' in name_lower:
-            return 'internal_review'
-        else:
-            return 'general'
-    
-    def get_task_hours(task: dict) -> float:
-        """Get hours from task, checking multiple fields."""
-        for key in ['hours', 'Planned_Hours', 'planned_hours', 'total_hours', 'PlannedHours']:
-            if key in task and task[key] not in (None, '', 'nan'):
-                try:
-                    return float(task[key])
-                except (TypeError, ValueError):
-                    continue
-        return 8.0  # Default: 1 day if no hours specified
-    
-    def compute_duration_days(hours: float) -> int:
-        """Compute task duration in business days: ceil(hours/8)."""
-        return max(1, math.ceil(hours / 8.0))
-    
-    # Separate tasks by level
-    deliverable_tasks = {}  # deliverable_code -> task
-    component_tasks = {}    # deliverable_code|component -> task
-    leaf_tasks = {}         # deliverable_code|component -> [tasks]
-    
-    for task in tasks:
-        level = task.get('level', 4)
-        deliverable_code = task.get('deliverable_code', '')
-        component = task.get('component', '') or task.get('Component', '')
-        
-        if level == 2:
-            # Deliverable (parent)
-            deliverable_tasks[deliverable_code] = task
-        elif level == 3:
-            # Component (parent)
-            key = f"{deliverable_code}|{component}"
-            component_tasks[key] = task
-        elif level >= 4:
-            # Leaf task
-            if not component or component.lower() == 'nan':
-                component = 'General'
-            key = f"{deliverable_code}|{component}"
-            if key not in leaf_tasks:
-                leaf_tasks[key] = []
-            leaf_tasks[key].append(task)
-    
-    print(f"[EFFORT-WATERFALL] Found {len(deliverable_tasks)} deliverables, {len(component_tasks)} components, {len(leaf_tasks)} component groups with leaf tasks")
-    
-    # Track UID assignments for predecessors
-    task_uid_counter = 1000
-    phase_last_task_uid = {}  # "deliverable|component|phase" -> last task UID in that phase
-    
-    # Process each deliverable
-    for deliv_code, deliv_task in deliverable_tasks.items():
-        # Get deliverable start from compressed timeline
-        deliv_start_str = deliv_task.get('start', '')
-        if not deliv_start_str:
-            continue
-            
-        try:
-            deliv_start = datetime.datetime.fromisoformat(deliv_start_str.replace('Z', '')).date()
-        except (ValueError, AttributeError):
-            continue
-        
-        # Find all component groups for this deliverable
-        deliv_component_keys = [k for k in leaf_tasks.keys() if k.startswith(f"{deliv_code}|")]
-        
-        if not deliv_component_keys:
-            continue
-        
-        # Track deliverable boundary for rollup
-        deliv_min_start = None
-        deliv_max_end = None
-        
-        # Process each component within this deliverable
-        component_cursor = deliv_start  # Components chain within deliverable
-        
-        for comp_key in sorted(deliv_component_keys):
-            component_name = comp_key.split('|', 1)[1] if '|' in comp_key else 'General'
-            tasks_in_component = leaf_tasks.get(comp_key, [])
-            
-            if not tasks_in_component:
-                continue
-            
-            # Classify and sort tasks by phase
-            tasks_by_phase = {phase: [] for phase in PHASE_ORDER}
-            for task in tasks_in_component:
-                task_name = task.get('name', '')
-                phase = classify_task_phase(task_name)
-                tasks_by_phase[phase].append(task)
-            
-            # Track component boundary for rollup
-            comp_min_start = None
-            comp_max_end = None
-            
-            # Waterfall: schedule each phase sequentially within component
-            phase_cursor = component_cursor
-            prev_phase_end_uid = None
-            
-            for phase in PHASE_ORDER:
-                phase_tasks = tasks_by_phase[phase]
-                if not phase_tasks:
-                    continue
-                
-                # Schedule tasks within this phase
-                # All tasks in same phase can run in parallel (same start)
-                phase_start = phase_cursor
-                phase_max_end = phase_start
-                
-                for task in phase_tasks:
-                    # Compute duration from hours
-                    hours = get_task_hours(task)
-                    duration_days = compute_duration_days(hours)
-                    
-                    # Set task dates
-                    task_start = phase_start
-                    task_end = add_business_days(task_start, duration_days - 1) if duration_days > 1 else task_start
-                    
-                    task['start'] = task_start.isoformat()
-                    task['end'] = task_end.isoformat()
-                    task['duration_days'] = duration_days
-                    task['phase_window'] = phase
-                    task['scheduling_source'] = 'effort_based'
-                    
-                    # Assign UID for predecessor tracking
-                    task_uid_counter += 1
-                    task['computed_uid'] = task_uid_counter
-                    
-                    # Add FS predecessor from previous phase (if exists)
-                    if prev_phase_end_uid:
-                        if 'predecessors' not in task:
-                            task['predecessors'] = []
-                        task['predecessors'].append({
-                            'uid': prev_phase_end_uid,
-                            'type': 'FS'  # Finish-to-Start
-                        })
-                    
-                    # Track phase end
-                    if task_end > phase_max_end:
-                        phase_max_end = task_end
-                    
-                    # Update component boundaries
-                    if comp_min_start is None or task_start < comp_min_start:
-                        comp_min_start = task_start
-                    if comp_max_end is None or task_end > comp_max_end:
-                        comp_max_end = task_end
-                
-                # Record last task in this phase for next phase's FS dependency
-                if phase_tasks:
-                    # Find the task that ends latest in this phase
-                    latest_task = max(phase_tasks, key=lambda t: datetime.datetime.fromisoformat(t.get('end', '2000-01-01')).date())
-                    prev_phase_end_uid = latest_task.get('computed_uid')
-                
-                # Next phase starts after this one ends (FS dependency)
-                phase_cursor = add_business_days(phase_max_end, 1)
-            
-            # Roll up component dates from its tasks
-            if comp_key in component_tasks and comp_min_start and comp_max_end:
-                comp_task = component_tasks[comp_key]
-                comp_task['start'] = comp_min_start.isoformat()
-                comp_task['end'] = comp_max_end.isoformat()
-                comp_task['scheduling_source'] = 'rollup_from_tasks'
-            
-            # Update deliverable boundaries
-            if comp_min_start:
-                if deliv_min_start is None or comp_min_start < deliv_min_start:
-                    deliv_min_start = comp_min_start
-            if comp_max_end:
-                if deliv_max_end is None or comp_max_end > deliv_max_end:
-                    deliv_max_end = comp_max_end
-            
-            # Next component starts after this one (optional: can run parallel)
-            # For now, components within a deliverable can run parallel
-            # If you want sequential components, set: component_cursor = add_business_days(comp_max_end, 1)
-        
-        # Roll up deliverable dates from its components/tasks
-        if deliv_min_start and deliv_max_end:
-            deliv_task['start'] = deliv_min_start.isoformat()
-            deliv_task['end'] = deliv_max_end.isoformat()
-            deliv_task['scheduling_source'] = 'rollup_from_children'
-            print(f"[EFFORT-WATERFALL] Deliverable {deliv_code}: {deliv_min_start} -> {deliv_max_end}")
-    
-    # Count scheduled tasks
-    scheduled_count = sum(1 for t in tasks if t.get('scheduling_source'))
-    print(f"[EFFORT-WATERFALL] Scheduled {scheduled_count} tasks with effort-based waterfall")
-    
-    return tasks
-
-
-def apply_phase_window_scheduling(
-    tasks: List[Dict[str, Any]],
-    component_windows: Dict[str, Dict[str, Any]] = None
-) -> List[Dict[str, Any]]:
-    """
-    DEPRECATED: Use apply_effort_based_waterfall_scheduling instead.
-    
-    This wrapper calls the new effort-based scheduler for backward compatibility.
-    """
-    return apply_effort_based_waterfall_scheduling(tasks)
-
 
 # ========= AI Timeline Generation =========
 class TimelineGenerationRequest(BaseModel):
@@ -7528,60 +7339,11 @@ async def generate_timeline(request: TimelineGenerationRequest):
                     buffer_work_days=DELIVERABLE_BUFFER_WORK_DAYS
                 )
                 
-                # PHASE-WINDOW SCHEDULING: Split components into general/internal_review/client_review phases
-                # This eliminates work-wait-work gaps by tiling phases across each component window
-                if PHASE_WINDOW_ENABLED:
-                    compressed_tasks = apply_phase_window_scheduling(compressed_tasks)
-                
-                # DUAL METRICS: Add both Effort (hours) and Duration (business days) to each task
-                # This addresses "why is it 12 days when it's 3 hours" confusion - both can be true!
-                # NOTE: Only adds new fields (effort_hours, duration_days) without mutating scheduler values
-                for task in compressed_tasks:
-                    # Check if milestone (zero-hour/approval tasks)
-                    is_milestone = task.get('is_milestone', False) or (
-                        task.get('name', '').lower().endswith('approval') or
-                        task.get('name', '').lower().endswith('complete')
-                    )
-                    
-                    # Effort = planned hours from the task (milestones have 0 hours)
-                    hours = 0.0
-                    for key in ['hours', 'Planned_Hours', 'planned_hours', 'total_hours', 'PlannedHours']:
-                        if key in task and task[key] not in (None, '', 'nan'):
-                            try:
-                                hours = float(task[key])
-                                break
-                            except (TypeError, ValueError):
-                                continue
-                    task['effort_hours'] = hours
-                    
-                    # Duration = business-day span from start to end
-                    # Milestones get 0 duration, regular tasks get computed span
-                    if is_milestone:
-                        task['duration_days'] = 0
-                    else:
-                        try:
-                            start_str = task.get('start', '')
-                            end_str = task.get('end', '')
-                            if start_str and end_str:
-                                start_dt = datetime.datetime.fromisoformat(start_str.replace('Z', '')).date()
-                                end_dt = datetime.datetime.fromisoformat(end_str.replace('Z', '')).date()
-                                # Count business days (Mon-Fri) in the span
-                                duration_days = shared_working_days_between(
-                                    datetime.datetime.combine(start_dt, datetime.time(8, 0)),
-                                    datetime.datetime.combine(end_dt, datetime.time(17, 0))
-                                )
-                                task['duration_days'] = max(1, duration_days)
-                            else:
-                                task['duration_days'] = max(1, math.ceil(hours / 8.0)) if hours > 0 else 1
-                        except (ValueError, AttributeError):
-                            task['duration_days'] = max(1, math.ceil(hours / 8.0)) if hours > 0 else 1
-                
                 result['tasks'] = compressed_tasks
                 
                 if 'metadata' not in result:
                     result['metadata'] = {}
                 result['metadata']['compression'] = compression_metadata
-                result['metadata']['phase_window_enabled'] = PHASE_WINDOW_ENABLED
                 
                 print(f"[Timeline] Compression complete: {compression_metadata.get('deliverables_compressed', 0)} deliverables chained")
             
@@ -8196,56 +7958,27 @@ def api_build(payload: BuildPayload):
         # If session_id is provided and SCENARIO_STORE has a working scenario,
         # return it instead of rebuilding (unless reset=true in future)
         # This prevents the 137→98 hours regression when clicking "Build Scenario" again
-        # IMPORTANT: Only use cache if selected deliverables match (fixes pricing aggregation bug)
         if payload.session_id and payload.session_id in SCENARIO_STORE:
             working_scenario = get_working_scenario(payload.session_id)
             if working_scenario and working_scenario.get("items"):
-                # Extract deliverable codes from cached scenario, filtering out blank codes
-                cached_codes = set(
-                    str(item.get("deliverable_code", "")).strip()
-                    for item in working_scenario.get("items", [])
-                    if item.get("deliverable_code") and str(item.get("deliverable_code", "")).strip()
-                )
-                requested_codes = set(
-                    str(code).strip() 
-                    for code in payload.selected_deliverable_codes
-                    if code and str(code).strip()
-                )
+                totals = working_scenario.get("totals", {})
+                total_hours = totals.get("hours", 0)
+                total_price = totals.get("price", 0)
                 
-                # Only use cache if selected deliverables match
-                if cached_codes == requested_codes:
-                    totals = working_scenario.get("totals", {})
-                    total_hours = totals.get("hours", 0)
-                    total_price = totals.get("price", 0)
-                    
-                    print(f"[/api/build] ✅ Using SCENARIO_STORE[{payload.session_id}] "
-                          f"hours={total_hours} price={total_price} (preserving Step 3 edits, {len(cached_codes)} items match)")
-                    
-                    # Update _CURRENT_SCENARIOS for Step 4 compatibility
-                    _CURRENT_SCENARIOS["A"] = working_scenario
-                    
-                    return {
-                        "scenarios": {"A": working_scenario},
-                        "totals": {"A": totals},
-                        "total_hours": total_hours,
-                        "total_price": total_price,
-                        "cached": True,
-                        "message": "Using working scenario from SCENARIO_STORE (Step 3 edits preserved)"
-                    }
-                else:
-                    # Deliverables changed - invalidate working scenario while preserving metadata
-                    print(f"[/api/build] 🔄 Deliverables changed: cached={len(cached_codes)} ({cached_codes}), requested={len(requested_codes)} ({requested_codes}) - rebuilding")
-                    # Clear scenario, baseline, AND totals to prevent stale data
-                    state = get_session_state(payload.session_id)
-                    state["scenario"] = None
-                    state["baseline"] = None
-                    state["totals"] = {"hours": 0.0, "price": 0.0}  # Clear totals to prevent stale data
-                    state["metadata"]["updated_at"] = time.time()
-                    state["metadata"]["rebuild_reason"] = "deliverables_changed"
-                    SCENARIO_STORE[payload.session_id] = state
-                    # Persist immediately to DB so reload doesn't restore old state
-                    _save_scenario_to_db(payload.session_id, state)
-                    print(f"[/api/build] Cache invalidated and persisted to DB")
+                print(f"[/api/build] ✅ Using SCENARIO_STORE[{payload.session_id}] "
+                      f"hours={total_hours} price={total_price} (preserving Step 3 edits)")
+                
+                # Update _CURRENT_SCENARIOS for Step 4 compatibility
+                _CURRENT_SCENARIOS["A"] = working_scenario
+                
+                return {
+                    "scenarios": {"A": working_scenario},
+                    "totals": {"A": totals},
+                    "total_hours": total_hours,
+                    "total_price": total_price,
+                    "cached": True,
+                    "message": "Using working scenario from SCENARIO_STORE (Step 3 edits preserved)"
+                }
 
         # Prepare UI intent
         pricing_mode = payload.pricing_mode
@@ -11289,141 +11022,6 @@ def api_post_scenarios(payload: dict, request: Request):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to build scenarios: {str(e)}")
 
-
-# ============================================================
-# TASK-LEVEL GANTT API: Unified schedule for UI and XML export
-# Returns Deliverable → Component → Task hierarchy with dual metrics
-# ============================================================
-@app.post("/api/gantt/task_level")
-def api_task_level_gantt(payload: dict):
-    """
-    5.2 PRO Step D: Returns ALL WBS rows for task-level Gantt display.
-    This ensures UI Gantt matches Workfront exactly by using same schedule source.
-    
-    Returns flat list of ALL rows with:
-    - uid: Unique row identifier
-    - parent_uid: Parent row identifier (for hierarchy)
-    - name: Task/component/deliverable name
-    - level: Outline level (1=Project, 2=Deliverable, 3=Component, 4=Task)
-    - start: ISO date string
-    - finish: ISO date string
-    - planned_hours: Effort (work hours)
-    - duration_business_days: Business-day span
-    """
-    session_id = payload.get("session_id") or payload.get("sessionId")
-    if not session_id:
-        raise HTTPException(status_code=400, detail="session_id required")
-    
-    # Get scenario from SCENARIO_STORE
-    state = get_session_state(session_id)
-    scenario = state.get("scenario", {})
-    
-    if not scenario:
-        raise HTTPException(status_code=404, detail="Scenario not found for session")
-    
-    project_start_str = scenario.get("project_start", datetime.date.today().isoformat())
-    try:
-        project_start_date = datetime.datetime.fromisoformat(project_start_str.replace('Z', '')).date()
-    except (ValueError, AttributeError):
-        project_start_date = datetime.date.today()
-    
-    # 5.2 PRO Step D: Build ALL WBS rows with proper scheduling
-    all_tasks = []
-    uid_counter = 1
-    wbs_to_uid = {}
-    
-    # Build from WBS if available (contains full L2→L3→L4 hierarchy)
-    wbs_df = scenario.get("wbs_df")
-    if wbs_df is not None and len(wbs_df) > 0:
-        # WBS DataFrame exists - extract full hierarchy
-        if isinstance(wbs_df, pd.DataFrame):
-            for _, row in wbs_df.iterrows():
-                wbs_id = str(row.get("WBS_ID", ""))
-                parent_wbs = str(row.get("Parent_WBS_ID", ""))
-                
-                # Calculate schedule using Duration_Days and Start_Offset_Days (5.2 Pro)
-                offset_days = int(row.get("Start_Offset_Days", 0) or 0)
-                duration_days = max(1, int(row.get("Duration_Days", 1) or 1))
-                planned_hours = float(row.get("Planned_Hours", 0) or 0)
-                
-                # Use business-day math for scheduling
-                start_date = add_business_days(project_start_date, offset_days)
-                finish_date = add_business_days(start_date, duration_days - 1) if duration_days > 1 else start_date
-                
-                uid = uid_counter
-                wbs_to_uid[wbs_id] = uid
-                parent_uid = wbs_to_uid.get(parent_wbs, 0)
-                
-                # Determine level from WBS structure
-                level = wbs_id.count('.') + 1 if wbs_id else 0
-                
-                task = {
-                    "uid": uid,
-                    "parent_uid": parent_uid,
-                    "wbs": wbs_id,
-                    "name": str(row.get("Task_Name", row.get("Task", row.get("Deliverable", "Unknown")))),
-                    "level": level,
-                    "start": start_date.isoformat(),
-                    "finish": finish_date.isoformat(),
-                    "planned_hours": planned_hours,
-                    "duration_business_days": duration_days,
-                    "deliverable_code": str(row.get("Deliverable_Code", "")),
-                    "component": str(row.get("Component", "")),
-                    "is_summary": level < 4  # L2, L3 are summary rows
-                }
-                all_tasks.append(task)
-                uid_counter += 1
-    
-    # Fallback: build from items if no WBS (L2 deliverables only)
-    if not all_tasks:
-        items = scenario.get("items", [])
-        for idx, item in enumerate(items, 1):
-            planned_hours = float(item.get("planned_hours", item.get("Planned_Hours", 0)) or 0)
-            duration_days = max(1, math.ceil(planned_hours / 8.0)) if planned_hours > 0 else 1
-            
-            # Check for Start_Date override from Gantt
-            start_str = item.get("Start_Date", item.get("start"))
-            if start_str:
-                try:
-                    start_date = datetime.datetime.fromisoformat(start_str.replace('Z', '')[:10]).date()
-                except (ValueError, AttributeError):
-                    start_date = project_start_date
-            else:
-                offset_days = int(item.get("Start_Offset_Days", 0) or 0)
-                start_date = add_business_days(project_start_date, offset_days)
-            
-            finish_date = add_business_days(start_date, duration_days - 1) if duration_days > 1 else start_date
-            
-            task = {
-                "uid": idx,
-                "parent_uid": 0,
-                "wbs": f"1.{idx}",
-                "name": item.get("deliverable", item.get("Deliverable", "")),
-                "level": 2,
-                "start": start_date.isoformat(),
-                "finish": finish_date.isoformat(),
-                "planned_hours": planned_hours,
-                "duration_business_days": duration_days,
-                "deliverable_code": item.get("deliverable_code", ""),
-                "component": "",
-                "is_summary": True
-            }
-            all_tasks.append(task)
-    
-    return {
-        "ok": True,
-        "tasks": all_tasks,
-        "task_count": len(all_tasks),
-        "stretching_enabled": ENABLE_DESCENDANT_STRETCHING,
-        "metadata": {
-            "source": "unified_schedule",
-            "five_two_pro_compliant": True,
-            "planned_hours_label": "Planned Hours (work)",
-            "duration_business_days_label": "Duration (business days)"
-        }
-    }
-
-
 @app.post("/api/build_scenario_c")
 def api_build_scenario_c_deprecated(payload: dict):
     if not DB.loaded:
@@ -13657,18 +13255,6 @@ def convert_excel_to_mspdi(
             if outline_level == 2 and fixed_cost > 0:
                 print(f"[XML EXPORT] 📊 Extracted FixedCost={fixed_cost} for WBS {wbs_id} (Task: {str(row.get('Task_Name', ''))[:50]})")
             
-            # 3-LEVEL HIERARCHY: Read Assignments_JSON field (L4 task assignments stored as metadata)
-            assignments_json_str = safe_str(row.get("Assignments_JSON"), "")
-            parsed_assignments = []
-            if assignments_json_str:
-                try:
-                    parsed_assignments = json.loads(assignments_json_str)
-                    if parsed_assignments:
-                        print(f"[XML EXPORT] 📋 Parsed Assignments_JSON for WBS {wbs_id}: {len(parsed_assignments)} assignments")
-                except (json.JSONDecodeError, TypeError) as e:
-                    parsed_assignments = []
-                    print(f"[XML EXPORT] ⚠️ Failed to parse Assignments_JSON for WBS {wbs_id}: {e}")
-            
             task_row = {
                 "WBS": str(row.get("WBS_ID", "")),
                 "ParentWBS": str(row.get("Parent_WBS_ID", "")),
@@ -13686,8 +13272,7 @@ def convert_excel_to_mspdi(
                 "Price_USD": price_usd,  # From scenario pricing
                 "FixedCost": fixed_cost, # Step 3 price as FixedCost (replaces hourly cost calc)
                 "Start_Date": start_date_str,  # Preserve from Gantt if available
-                "End_Date": end_date_str,  # Preserve from Gantt if available
-                "Assignments_JSON": parsed_assignments  # 3-LEVEL HIERARCHY: Role assignments for L4 tasks
+                "End_Date": end_date_str  # Preserve from Gantt if available
             }
             rows.append(task_row)
         
@@ -14109,14 +13694,47 @@ def convert_excel_to_mspdi(
         else:
             project_start = datetime.datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
 
-        # 3-LEVEL HIERARCHY: Use shared scheduling module (single source of truth)
-        # See scheduling_calendar.py for Mon-Fri, 9-5 business calendar math
+        # Business calendar helpers (using same Mon-Fri, 8-12 & 13-17 schedule)
         from datetime import time, date
         
-        # Alias shared module function for local use
+        BUS_BLOCKS = [(time(8,0), time(12,0)), (time(13,0), time(17,0))]
+
+        def is_business_day(d):
+            return d.weekday() < 5  # Mon–Fri
+
+        def business_minutes_in_range(day: date, start_t: time, end_t: time) -> int:
+            # minutes worked on a single day between start_t and end_t
+            if not is_business_day(day): 
+                return 0
+            start_t = max(start_t, BUS_BLOCKS[0][0])
+            end_t   = min(end_t,   BUS_BLOCKS[-1][1])
+            if end_t <= start_t:
+                return 0
+            total = 0
+            for a,b in BUS_BLOCKS:
+                s = max(start_t, a)
+                e = min(end_t,   b)
+                if e > s:
+                    total += int((datetime.datetime.combine(day,e) - datetime.datetime.combine(day,s)).total_seconds() // 60)
+            return total
+
         def business_minutes_between(start_dt: datetime.datetime, end_dt: datetime.datetime) -> int:
-            """Wrapper around shared module's working_minutes_between for backwards compatibility."""
-            return shared_working_minutes_between(start_dt, end_dt)
+            if end_dt <= start_dt:
+                return 0
+            cur = start_dt.date()
+            end = end_dt.date()
+            minutes = 0
+            # first day (partial)
+            minutes += business_minutes_in_range(cur, start_dt.time(), time(17,0))
+            # middle full days
+            d = cur + datetime.timedelta(days=1)
+            while d < end:
+                if is_business_day(d):
+                    minutes += 480  # 8h
+                d += datetime.timedelta(days=1)
+            # last day (partial)
+            minutes += business_minutes_in_range(end, time(8,0), end_dt.time())
+            return minutes
 
         # Calculate task schedules
         uid_to_sched = {}
@@ -14145,11 +13763,12 @@ def convert_excel_to_mspdi(
                     start_date = datetime.datetime.combine(start_date_only, datetime.time(8, 0))
                     end_date = datetime.datetime.combine(end_date_only, datetime.time(17, 0))
                     
-                    # 5.2 PRO FIX Step B/E: Use BUSINESS days for duration, not calendar days
-                    # This ensures DurationMinutes = Duration_Days * 480 regardless of weekends
+                    # CRITICAL FIX: Duration = calendar span in 8h-day units (Option C from Architect)
+                    # This prevents Workfront from recalculating dates on import
+                    # Formula: Duration_minutes = ((Finish - Start).days + 1) × 480
                     # Work stays as PlannedHours (may differ from Duration - indicates partial allocation)
-                    business_days = calculate_business_days_between(start_date_only, end_date_only)
-                    duration_hours = business_days * 8.0  # 8-hour working days
+                    calendar_days = (end_date_only - start_date_only).days + 1  # Inclusive count
+                    duration_hours = calendar_days * 8.0  # 8-hour working days
                     
                     # Mark this UID as having preserved dates that should not be overwritten by rollup
                     preserved_dates.add(r["UID"])
@@ -14161,17 +13780,9 @@ def convert_excel_to_mspdi(
                 except (ValueError, AttributeError, TypeError) as e:
                     # If parsing fails, fall back to offset calculation and log the issue
                     print(f"[XML EXPORT] ⚠️ Failed to parse Gantt dates for WBS {r['WBS']}: {e}")
-                    # 5.2 PRO FIX Step B: Use Duration_Days to compute Finish, NOT PlannedHours
-                    # PlannedHours goes to <Work> only - does not drive timeline
-                    duration_days = max(1, int(r["Duration"]))
-                    start_date_only = (project_start + datetime.timedelta(days=r["StartOffset"])).date() if isinstance(project_start, datetime.datetime) else project_start + datetime.timedelta(days=r["StartOffset"])
-                    if isinstance(start_date_only, datetime.datetime):
-                        start_date_only = start_date_only.date()
-                    # add_business_days for finish (duration - 1 because start day counts as day 1)
-                    finish_date_only = add_business_days(start_date_only, duration_days - 1) if duration_days > 1 else start_date_only
-                    start_date = datetime.datetime.combine(start_date_only, datetime.time(8, 0))
-                    end_date = datetime.datetime.combine(finish_date_only, datetime.time(17, 0))
-                    duration_hours = duration_days * hours_per_day
+                    start_date = project_start + datetime.timedelta(days=r["StartOffset"])
+                    duration_hours = max(r["Duration"] * hours_per_day, r["PlannedHours"])
+                    end_date = start_date + datetime.timedelta(hours=duration_hours)
             else:
                 # No existing dates - calculate from offsets
                 # Log when deliverables don't have preserved dates (helps diagnose issues)
@@ -14179,11 +13790,6 @@ def convert_excel_to_mspdi(
                 if is_deliverable_level:
                     task_name = r.get("Name", "Unknown")[:30]
                     print(f"[XML EXPORT] ℹ️ No Gantt dates for {task_name} (WBS {r['WBS']}) - using offset calculation")
-                
-                # 5.2 PRO FIX Step B: Use Duration_Days as authoritative for timeline
-                # Compute Finish = Start + (Duration_Days - 1) business days
-                # PlannedHours goes to <Work> only - does not drive timeline
-                duration_days = max(1, int(r["Duration"]))
                 
                 # FIX: If parent has preserved dates from Gantt, calculate relative to parent
                 # Otherwise fall back to global project_start
@@ -14199,23 +13805,17 @@ def convert_excel_to_mspdi(
                     
                     # Calculate offset RELATIVE to parent (subtract parent's offset from this offset)
                     relative_offset = this_offset - parent_offset
-                    parent_start_date = parent_sched["Start"].date() if isinstance(parent_sched["Start"], datetime.datetime) else parent_sched["Start"]
-                    start_date_only = add_business_days(parent_start_date, relative_offset)
-                    finish_date_only = add_business_days(start_date_only, duration_days - 1) if duration_days > 1 else start_date_only
-                    start_date = datetime.datetime.combine(start_date_only, datetime.time(8, 0))
-                    end_date = datetime.datetime.combine(finish_date_only, datetime.time(17, 0))
-                    duration_hours = duration_days * hours_per_day
+                    start_date = parent_sched["Start"] + datetime.timedelta(days=relative_offset)
+                    
+                    duration_hours = max(r["Duration"] * hours_per_day, r["PlannedHours"])
+                    end_date = start_date + datetime.timedelta(hours=duration_hours)
                     
                     print(f"[XML EXPORT] 📍 Row {r['WBS']} ({r.get('TaskName', 'N/A')[:30]}): Parent {parent_wbs} preserved → calculating as parent_start + {relative_offset} days = {start_date.date()}")
                 else:
                     # No preserved parent - use global project_start (original logic)
-                    # 5.2 PRO FIX Step B: Use business-day math for offsets and finish
-                    project_start_date = project_start.date() if isinstance(project_start, datetime.datetime) else project_start
-                    start_date_only = add_business_days(project_start_date, r["StartOffset"])
-                    finish_date_only = add_business_days(start_date_only, duration_days - 1) if duration_days > 1 else start_date_only
-                    start_date = datetime.datetime.combine(start_date_only, datetime.time(8, 0))
-                    end_date = datetime.datetime.combine(finish_date_only, datetime.time(17, 0))
-                    duration_hours = duration_days * hours_per_day
+                    start_date = project_start + datetime.timedelta(days=r["StartOffset"])
+                    duration_hours = max(r["Duration"] * hours_per_day, r["PlannedHours"])
+                    end_date = start_date + datetime.timedelta(hours=duration_hours)
             
             uid_to_sched[r["UID"]] = {
                 "Start": start_date,
@@ -14270,9 +13870,9 @@ def convert_excel_to_mspdi(
                     if isinstance(end_dt, datetime.datetime) and end_dt.hour == 0:
                         end_dt = datetime.datetime.combine(end_dt.date(), datetime.time(17, 0))
                     
-                    # 5.2 PRO FIX Step B/E: Use BUSINESS days for duration, not calendar days
-                    business_days = calculate_business_days_between(start_dt.date(), end_dt.date())
-                    duration_hours = business_days * 8.0
+                    # Calculate duration from calendar span
+                    calendar_days = (end_dt.date() - start_dt.date()).days + 1
+                    duration_hours = calendar_days * 8.0
                     
                     # Override uid_to_sched with compressed timeline dates
                     uid = r["UID"]
@@ -14289,61 +13889,6 @@ def convert_excel_to_mspdi(
                     applied_count += 1
             
             print(f"[XML EXPORT] 📊 Applied compressed timeline to {applied_count} L2 deliverables")
-            
-            # 5.2 PRO FIX Step C: After applying compressed L2 dates, reschedule all children
-            # relative to their deliverable's new start date
-            # This ensures children land inside the deliverable span without stretching
-            print(f"[XML EXPORT] 🔄 Step C: Rescheduling children from deliverable windows")
-            
-            # Build mapping: deliverable WBS -> (new_start, new_end, original_start)
-            l2_schedules = {}
-            for r in rows:
-                outline_level = r["WBS"].count(".") + 1 if r["WBS"] else 0
-                if outline_level == 2 and r["UID"] in compressed_timeline_uids:
-                    # This is a compressed L2 deliverable
-                    l2_schedules[r["WBS"]] = {
-                        "new_start": uid_to_sched[r["UID"]]["Start"],
-                        "new_finish": uid_to_sched[r["UID"]]["Finish"],
-                        "deliverable_offset": r.get("StartOffset", 0),
-                        "uid": r["UID"]
-                    }
-            
-            # Reschedule children based on their relative offset from deliverable start
-            child_reschedule_count = 0
-            for r in rows:
-                outline_level = r["WBS"].count(".") + 1 if r["WBS"] else 0
-                if outline_level <= 2:
-                    continue  # Skip L1 project and L2 deliverables (already handled)
-                
-                # Find parent L2 deliverable for this row
-                parent_l2_wbs = ".".join(r["WBS"].split(".")[:2])  # e.g. "1.1" from "1.1.2.3"
-                
-                if parent_l2_wbs not in l2_schedules:
-                    continue  # Parent wasn't compressed
-                
-                l2_info = l2_schedules[parent_l2_wbs]
-                deliv_start = l2_info["new_start"]
-                deliv_offset = l2_info["deliverable_offset"]
-                
-                # Calculate child's relative offset from deliverable
-                child_offset = r.get("StartOffset", 0) - deliv_offset
-                duration_days = max(1, int(r.get("Duration", 1)))
-                
-                # Reschedule child using business-day math
-                deliv_start_date = deliv_start.date() if isinstance(deliv_start, datetime.datetime) else deliv_start
-                child_start_date = add_business_days(deliv_start_date, child_offset)
-                child_finish_date = add_business_days(child_start_date, duration_days - 1) if duration_days > 1 else child_start_date
-                
-                # Update uid_to_sched with new child schedule
-                child_uid = r["UID"]
-                old_start = uid_to_sched[child_uid]["Start"]
-                uid_to_sched[child_uid]["Start"] = datetime.datetime.combine(child_start_date, datetime.time(8, 0))
-                uid_to_sched[child_uid]["Finish"] = datetime.datetime.combine(child_finish_date, datetime.time(17, 0))
-                uid_to_sched[child_uid]["DurationHours"] = duration_days * 8.0
-                
-                child_reschedule_count += 1
-            
-            print(f"[XML EXPORT] 📊 Step C: Rescheduled {child_reschedule_count} children from deliverable windows")
 
         # Build UID-based children mapping for rollup (as expected by patch)
         wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
@@ -14442,34 +13987,26 @@ def convert_excel_to_mspdi(
             
             print(f"[XML EXPORT] ✓ Completed stretch of {len(kids)} children")
         
-        # DESCENDANT STRETCHING: Controlled by ENABLE_DESCENDANT_STRETCHING flag
-        # When enabled: Stretches leaf tasks to fill deliverable windows (Workfront rollup match)
-        # When disabled: Parents derive dates from children via bottom-up rollup
-        if ENABLE_DESCENDANT_STRETCHING:
-            print(f"[XML EXPORT] 📐 DESCENDANT STRETCHING ENABLED - stretching children to fill deliverable windows")
-            
-            # CRITICAL FIX Part 2: Stretch and clamp descendants for all preserved deliverables
-            # This ensures child components/tasks FILL the deliverable window set in Gantt (not just clamp)
-            # Must happen BEFORE rollup_summary runs to prevent wrong date calculations
-            for preserved_uid in preserved_dates:
-                if preserved_uid in uid_to_sched and preserved_uid in children_by_parent:
-                    preserved_start = uid_to_sched[preserved_uid]["Start"]
-                    preserved_finish = uid_to_sched[preserved_uid]["Finish"]
-                    stretch_and_clamp_descendants(preserved_uid, preserved_start, preserved_finish)
-                    print(f"[XML EXPORT] 🔒 Stretched descendants of preserved UID {preserved_uid} to fill {preserved_start.date()} to {preserved_finish.date()}")
-            
-            # TICKET B: Stretch and clamp descendants for compressed timeline deliverables
-            # This ensures Workfront recomputes the correct summary duration (64 days vs 25 days)
-            # by ensuring child tasks span the full deliverable window (new_start to new_end)
-            if compressed_timeline_uids:
-                for ct_uid in compressed_timeline_uids:
-                    if ct_uid in uid_to_sched and ct_uid in children_by_parent:
-                        ct_start = uid_to_sched[ct_uid]["Start"]
-                        ct_finish = uid_to_sched[ct_uid]["Finish"]
-                        stretch_and_clamp_descendants(ct_uid, ct_start, ct_finish)
-                        print(f"[XML EXPORT] 🎯 TICKET B: Stretched children of compressed timeline UID {ct_uid} to fill {ct_start.date()} to {ct_finish.date()}")
-        else:
-            print(f"[XML EXPORT] 📐 DESCENDANT STRETCHING DISABLED - using bottom-up rollup from effort-based scheduler")
+        # CRITICAL FIX Part 2: Stretch and clamp descendants for all preserved deliverables
+        # This ensures child components/tasks FILL the deliverable window set in Gantt (not just clamp)
+        # Must happen BEFORE rollup_summary runs to prevent wrong date calculations
+        for preserved_uid in preserved_dates:
+            if preserved_uid in uid_to_sched and preserved_uid in children_by_parent:
+                preserved_start = uid_to_sched[preserved_uid]["Start"]
+                preserved_finish = uid_to_sched[preserved_uid]["Finish"]
+                stretch_and_clamp_descendants(preserved_uid, preserved_start, preserved_finish)
+                print(f"[XML EXPORT] 🔒 Stretched descendants of preserved UID {preserved_uid} to fill {preserved_start.date()} to {preserved_finish.date()}")
+        
+        # TICKET B: Stretch and clamp descendants for compressed timeline deliverables
+        # This ensures Workfront recomputes the correct summary duration (64 days vs 25 days)
+        # by ensuring child tasks span the full deliverable window (new_start to new_end)
+        if compressed_timeline_uids:
+            for ct_uid in compressed_timeline_uids:
+                if ct_uid in uid_to_sched and ct_uid in children_by_parent:
+                    ct_start = uid_to_sched[ct_uid]["Start"]
+                    ct_finish = uid_to_sched[ct_uid]["Finish"]
+                    stretch_and_clamp_descendants(ct_uid, ct_start, ct_finish)
+                    print(f"[XML EXPORT] 🎯 TICKET B: Stretched children of compressed timeline UID {ct_uid} to fill {ct_start.date()} to {ct_finish.date()}")
         
         # TICKET B: Log how many UIDs were protected from rollup overwrite
         print(f"[XML EXPORT] 🛡️ TICKET B: Protected {len(stretched_uids)} stretched UIDs from rollup_summary overwrite")
@@ -14561,17 +14098,9 @@ def convert_excel_to_mspdi(
                 sched["Finish"] = sched["Finish"].strftime("%Y-%m-%dT%H:%M:%S")
 
         # Create resource list (filter out nan/empty roles)
-        # 3-LEVEL HIERARCHY: Collect roles from both RoleList AND Assignments_JSON
         all_roles = set()
         for r in rows:
             all_roles.update(r["RoleList"])
-            # Also collect roles from Assignments_JSON (L4 tasks with role metadata)
-            assignments_json = r.get("Assignments_JSON", [])
-            if assignments_json and isinstance(assignments_json, list):
-                for assign in assignments_json:
-                    role = assign.get("role") or assign.get("resource_name")
-                    if role:
-                        all_roles.add(role)
         if allow_unassigned:
             all_roles.add("Unassigned")
         
@@ -14899,137 +14428,14 @@ def convert_excel_to_mspdi(
             print(f"[MULTI-ASSIGN] Summary: {len(rows_input)} rows → {len(merged_rows)} tasks ({len(uid_alias_map)} merged)")
             return merged_rows, uid_alias_map
         
-        # ====================================================================================
-        # ASSIGNMENT-LEVEL EXPORT: When ENABLE_MULTI_ASSIGNMENT is True, emit one XML Task
-        # per role assignment (the OPPOSITE of the old merge behavior).
-        # This gives per-role granularity in Workfront:
-        #   "Brand Narrative - Designer (Mid): 8h" instead of "Brand Narrative: 16h"
-        # ====================================================================================
-        def expand_assignments_to_separate_tasks(rows_input, uid_to_sched_map):
-            """
-            Expand role assignments into separate XML Tasks.
-            
-            For each task row that has a Role assigned:
-            - Create a new task with UID = base_uid * 1000 + assignment_index
-            - Set Name = "{task_name} - {role} ({seniority})"
-            - Keep original hours on the assignment task
-            
-            Parent summary tasks (no Role) pass through unchanged.
-            
-            Returns:
-                - expanded_rows: List of row dicts (one per assignment)
-                - uid_alias_map: Maps old UIDs to new primary UIDs for dependency rewrites
-            """
-            expanded_rows = []
-            uid_alias_map = {}
-            
-            # Group rows by their parent task WBS to find assignments under same task
-            from collections import defaultdict
-            assignment_groups = defaultdict(list)
-            non_assignment_rows = []
-            
-            for row in rows_input:
-                role_val = row.get("Role", "") or row.get("RoleStr", "")
-                if not role_val or pd.isna(role_val) or str(role_val).strip() == "" or str(role_val).lower() == "unassigned":
-                    # No role - this is a summary/parent task, pass through
-                    non_assignment_rows.append(row)
-                else:
-                    # Has role - this is an assignment, group by parent WBS
-                    parent_wbs = row.get("ParentWBS", "")
-                    assignment_groups[parent_wbs].append(row)
-            
-            # Add non-assignment rows first (with identity mapping in uid_alias_map)
-            for row in non_assignment_rows:
-                expanded_rows.append(row)
-                # CRITICAL FIX: Add non-assignment tasks to uid_alias_map with identity mapping
-                # This ensures ALL UIDs have a mapping, not just assignment tasks
-                uid_alias_map[row["UID"]] = row["UID"]
-            
-            # Process assignment groups - each assignment becomes its own task
-            for parent_wbs, assignments in assignment_groups.items():
-                for idx, asgn in enumerate(assignments):
-                    base_uid = asgn["UID"]
-                    role = str(asgn.get("Role", "") or asgn.get("RoleStr", "")).strip()
-                    seniority = str(asgn.get("Seniority", "Mid")).strip() if asgn.get("Seniority") else "Mid"
-                    task_name = str(asgn.get("Name", "")).strip()
-                    
-                    # EDGE CASE HANDLING: Safely extract hours with None/NaN/negative protection
-                    hours_raw = asgn.get("PlannedHours") or asgn.get("Planned_Hours") or 0
-                    if hours_raw is None or (hasattr(pd, 'isna') and pd.isna(hours_raw)):
-                        hours = 0.0
-                    else:
-                        try:
-                            hours = max(0.0, float(hours_raw))  # Clamp negative to zero
-                        except (ValueError, TypeError):
-                            hours = 0.0
-                    
-                    # Create new UID for this assignment (unique, traceable)
-                    new_uid = base_uid * 1000 + idx + 1
-                    
-                    # FIX: Keep task name clean - roles must exist ONLY in Assignments
-                    # Don't add role names to task titles (per Workfront best practices)
-                    new_name = task_name
-                    
-                    # Copy row with new UID and name
-                    expanded_row = {
-                        **asgn,
-                        "UID": new_uid,
-                        "Name": new_name,
-                        "PlannedHours": hours,
-                        "_original_uid": base_uid,  # Track original for dependency rewrites
-                        "_is_assignment_task": True,  # Flag for duration calculation
-                    }
-                    expanded_rows.append(expanded_row)
-                    
-                    # CRITICAL: Copy schedule data for the new UID from original
-                    # This ensures Start/Finish dates are available for XML export
-                    if base_uid in uid_to_sched_map:
-                        uid_to_sched_map[new_uid] = {
-                            **uid_to_sched_map[base_uid],
-                            "PlannedHours": hours,  # Use assignment-specific hours
-                        }
-                    
-                    # CRITICAL FIX: Add NEW assignment UID to uid_alias_map (identity mapping)
-                    # This ensures the new UID can be looked up in dependency resolution
-                    uid_alias_map[new_uid] = new_uid
-                    
-                    # Map original UID to LAST (terminal) assignment's UID for dependencies
-                    # This ensures dependencies to the original task point to the final assignment
-                    # (overwrite on each iteration so final iteration wins)
-                    uid_alias_map[base_uid] = new_uid
-                    
-                    print(f"[ASSIGNMENT EXPORT] Created: '{new_name}' UID={new_uid} Hours={hours}")
-            
-            # Sort by WBS to maintain hierarchy order
-            def wbs_sort_key(row):
-                """Sort WBS segments using tuple of (type, value) to avoid mixed int/str comparison."""
-                wbs = row.get("WBS", "")
-                if not wbs:
-                    return ()
-                parts = str(wbs).split(".")
-                key = []
-                for p in parts:
-                    try:
-                        key.append((0, int(p)))  # Numeric: (0, int_value)
-                    except ValueError:
-                        key.append((1, p))  # Text: (1, str_value)
-                return tuple(key)
-            
-            expanded_rows.sort(key=wbs_sort_key)
-            
-            print(f"[ASSIGNMENT EXPORT] Summary: {len(rows_input)} rows → {len(expanded_rows)} tasks ({len(uid_alias_map)} assignments expanded)")
-            return expanded_rows, uid_alias_map
-        
-        # Multi-assignment export: Controlled by ENABLE_MULTI_ASSIGNMENT flag
-        # When True: Export one XML Task per role assignment (per-role granularity)
-        # When False: Keep tasks as-is (legacy behavior)
+        # Multi-assignment grouping: Controlled by ENABLE_MULTI_ASSIGNMENT flag
         if ENABLE_MULTI_ASSIGNMENT:
-            rows, uid_alias_map = expand_assignments_to_separate_tasks(rows, uid_to_sched)
-            print(f"[EXPORT] Assignment-level export ENABLED - {len(uid_alias_map)} assignments expanded")
+            rows, uid_alias_map = group_multi_assignments(rows, uid_to_sched)
+            print(f"[EXPORT] Multi-assignment merging ENABLED - {len(uid_alias_map)} UIDs aliased")
         else:
             # Identity mapping (each UID maps to itself)
             uid_alias_map = {row["UID"]: row["UID"] for row in rows}
-            print(f"[EXPORT] Assignment-level export DISABLED - exporting {len(rows)} tasks (merged)")
+            print(f"[EXPORT] Multi-assignment merging DISABLED - exporting {len(rows)} tasks (one per role)")
         
         # ====================================================================================
         # CHRONOLOGICAL WATERFALL SORTING
@@ -15471,15 +14877,8 @@ def convert_excel_to_mspdi(
             # Sort by WBS order (natural order: 1.1, 1.2, 1.3, ...)
             if l2_candidates:
                 def wbs_sort_key(item):
-                    """Sort WBS segments using tuple of (type, value) to avoid mixed int/str comparison."""
                     parts = item["wbs"].split(".")
-                    key = []
-                    for p in parts:
-                        try:
-                            key.append((0, int(p)))  # Numeric: (0, int_value)
-                        except ValueError:
-                            key.append((1, p))  # Text: (1, str_value)
-                    return tuple(key)
+                    return [int(p) if p.isdigit() else p for p in parts]
                 l2_candidates.sort(key=wbs_sort_key)
                 first_l2_deliverable_uid = l2_candidates[0]["uid"]
                 print(f"[TIGHT WATERFALL] 🎯 First L2 deliverable UID={first_l2_deliverable_uid} (WBS {l2_candidates[0]['wbs']}) will use SNET constraint")
@@ -15490,11 +14889,13 @@ def convert_excel_to_mspdi(
         skipped_components = 0
         task_id_counter = 0
         for r in rows:
-            # Calculate outline level for hierarchy
+            # Calculate outline level for depth filtering
             outline_level = r["WBS"].count(".") + 1  # 1 for '1', 2 for '1.1', etc.
             
-            # RESTORED: Export all levels (L1=Project, L2=Deliverable, L3=Component, L4+=Tasks)
-            # Previously capped at OutlineLevel 3, now exporting full 4-level hierarchy
+            # CRITICAL: Skip components (OutlineLevel > 3) per Workfront requirements
+            if outline_level > 3:
+                skipped_components += 1
+                continue
             
             task_id_counter += 1
             task = SubElement(tasks_elem, "Task")
@@ -15515,12 +14916,11 @@ def convert_excel_to_mspdi(
             
             SubElement(task, "OutlineLevel").text = str(outline_level)
             
-            # FIX: Any task that has children is a Summary task - use summary_set (parents only)
-            # This ensures Workfront properly rolls up hours from children
+            # GPT-5 PRO FIX: Make deliverable/summary mutually exclusive to prevent duplicate ConstraintType tags
+            # WATERFALL FIX: Deliverables are now OutlineLevel=2 (direct children of Project Summary)
             is_deliverable = outline_level == 2 and not is_root
-            # Summary=1 for ANY parent task (including deliverables with children), not just non-deliverables
-            is_parent_task = r["WBS"] in summary_set or is_root
-            SubElement(task, "Summary").text = "1" if is_parent_task else "0"
+            is_summary = (r["WBS"] in summary_set or is_root) and not is_deliverable
+            SubElement(task, "Summary").text = "1" if is_summary else "0"
             
             # GPT-5 PRO FIX: Conditional DurationFormat based on manual scheduling
             # TIGHT_WATERFALL: Deliverables use DurationFormat=7 (auto-scheduled) when enabled
@@ -15530,7 +14930,7 @@ def convert_excel_to_mspdi(
                 # TIGHT WATERFALL: Deliverables are auto-scheduled with ASAP constraint
                 is_manually_scheduled = False
             else:
-                is_manually_scheduled = is_deliverable or (is_parent_task and not is_root)
+                is_manually_scheduled = is_deliverable or (is_summary and not is_root)
             SubElement(task, "DurationFormat").text = "53" if is_manually_scheduled else "7"
             
             # GPT-5 PRO FIX: Reordered branches to prevent overlap (root → deliverable → summary → leaf)
@@ -15571,10 +14971,9 @@ def convert_excel_to_mspdi(
                         finish_str = uid_to_sched[r["UID"]]["Finish"]
                         start_dt = datetime.datetime.fromisoformat(start_str.replace('Z', ''))
                         finish_dt = datetime.datetime.fromisoformat(finish_str.replace('Z', ''))
-                        # FIX: Business days INCLUSIVE - DO NOT subtract 1
-                        # If Start/Finish are inclusive day bounds, Duration must also be inclusive
+                        # Business days inclusive, then -1 for exclusive duration semantics
                         biz_days_inclusive = calculate_business_days_between(start_dt.date(), finish_dt.date())
-                        duration_days = max(1, biz_days_inclusive)
+                        duration_days = max(1, biz_days_inclusive - 1)
                         print(f"[XML EXPORT] 📏 Deliverable Duration (business days fallback): {name_txt[:40]} = {duration_days} days")
                     except Exception as e:
                         duration_days = 1
@@ -15624,20 +15023,21 @@ def convert_excel_to_mspdi(
                     
                     print(f"[WORKFRONT] 🔒 Applied FNLT constraint to deliverable: {name_txt} (WBS {r['WBS']}, Finish={constraint_date})")
             
-            elif is_parent_task and not is_root and not is_deliverable:
-                # NON-DELIVERABLE PARENT TASKS (Components, OutlineLevel 3+): Calculate actual duration from Start/Finish
+            elif is_summary and not is_root:
+                # NON-ROOT SUMMARY TASKS (OutlineLevel 3+): Calculate actual duration from Start/Finish
                 SubElement(task, "Work").text = "PT0M"
                 
                 # Calculate Duration using BUSINESS DAYS (Mon-Fri) to match Workfront
-                # FIX: Business days INCLUSIVE - DO NOT subtract 1
-                # If Start/Finish are inclusive day bounds, Duration must also be inclusive
+                # The helper is inclusive of both endpoints, but duration is start-to-finish (exclusive)
+                # So we subtract 1 to get the correct span (e.g., 65 inclusive → 64 duration)
                 try:
                     start_str = uid_to_sched[r["UID"]]["Start"]
                     finish_str = uid_to_sched[r["UID"]]["Finish"]
                     start_dt = datetime.datetime.fromisoformat(start_str.replace('Z', ''))
                     finish_dt = datetime.datetime.fromisoformat(finish_str.replace('Z', ''))
+                    # Business days inclusive count, then -1 for exclusive duration semantics
                     biz_days_inclusive = calculate_business_days_between(start_dt.date(), finish_dt.date())
-                    duration_days = max(1, biz_days_inclusive)
+                    duration_days = max(1, biz_days_inclusive - 1)
                     duration_minutes = duration_days * 480  # 8-hour workday
                     SubElement(task, "Duration").text = f"PT{duration_minutes}M"
                 except Exception:
@@ -15650,63 +15050,65 @@ def convert_excel_to_mspdi(
                 SubElement(task, "ConstraintType").text = "5"  # Start No Later Than (for summaries)
             # Only set Duration/Work for non-summary leaf tasks
             else:
-                # ====================================================================================
-                # GPT 5.2 PRO FIX D: Duration = business_minutes_between(Start, Finish) for ALL tasks
-                # Work = planned effort (hours × 60 minutes) - does NOT drive timeline
-                # Duration = schedule window span - ALWAYS derived from Start/Finish business days
-                # This prevents Workfront from recalculating dates on import
-                # ====================================================================================
+                # WORKFRONT FIX: Duration MUST equal (Finish - Start) for ALL tasks
+                # NO 960-minute snapping - use actual timestamp difference
+                # This is critical to prevent Workfront from recalculating dates on import
                 
-                # Get PlannedHours from the row (assignment tasks have this set directly)
-                work_hours = float(r.get("PlannedHours", 0) or r.get("Planned_Hours", 0) or 0)
-                if pd.isna(work_hours):
-                    work_hours = 0
+                start_val = uid_to_sched[r["UID"]]["Start"]
+                finish_val = uid_to_sched[r["UID"]]["Finish"]
                 
-                # Fallback: Check uid_to_sched if row doesn't have hours
-                if work_hours <= 0 and r["UID"] in uid_to_sched:
-                    sched_hours = uid_to_sched[r['UID']].get('PlannedHours', 0)
-                    if sched_hours and not pd.isna(sched_hours):
-                        work_hours = float(sched_hours)
+                # Robust datetime parser that handles timezone suffixes (Z, +00:00, etc.)
+                def to_datetime(val):
+                    if isinstance(val, datetime.datetime):
+                        return val
+                    elif isinstance(val, str):
+                        # Remove timezone suffixes for parsing
+                        val_clean = val.replace('Z', '+00:00')  # Convert Z to +00:00
+                        # Try parsing with fromisoformat (handles timezones)
+                        try:
+                            return datetime.datetime.fromisoformat(val_clean)
+                        except ValueError:
+                            # Fallback: strip timezone manually and parse
+                            val_clean = val.split('+')[0].split('-')
+                            # Rejoin date portion (first 3 parts: YYYY, MM, DD)
+                            val_clean = '-'.join(val_clean[:3]) + val_clean[3] if len(val_clean) > 3 else '-'.join(val_clean)
+                            val_clean = val_clean.split('.')[0]  # Remove milliseconds
+                            return datetime.datetime.fromisoformat(val_clean)
+                    else:
+                        return val
                 
-                work_minutes = max(0, int(work_hours * 60))
+                start_dt = to_datetime(start_val)
+                finish_dt = to_datetime(finish_val)
+                
+                # Work calculation: For multi-assignment tasks, sum all assignee hours
+                if r.get("multi_assignment") and "assignments" in r:
+                    # Multi-assignment: sum all assignee work hours
+                    total_work_hours = sum(a["work_hours"] for a in r["assignments"])
+                    work_minutes = int(total_work_hours * 60)
+                else:
+                    # Single assignment: use PlannedHours from Gantt (actual effort)
+                    work_hours = uid_to_sched[r['UID']].get('PlannedHours', 0)
+                    if pd.isna(work_hours):
+                        work_hours = 0
+                    work_minutes = max(0, int(work_hours * 60))
+                
                 SubElement(task, "Work").text = f"PT{work_minutes}M"
                 
-                # GPT 5.2 PRO FIX D: Duration ALWAYS from Start/Finish span (business days)
-                # This applies to ALL leaf tasks including assignment tasks
+                # WORKFRONT FIX: Duration = (Finish - Start) business days × 480 minutes
+                # This matches the calendar-based duration Workfront expects
                 try:
-                    start_val = uid_to_sched[r["UID"]]["Start"]
-                    finish_val = uid_to_sched[r["UID"]]["Finish"]
-                    
-                    def to_datetime(val):
-                        if isinstance(val, datetime.datetime):
-                            return val
-                        elif isinstance(val, str):
-                            val_clean = val.replace('Z', '+00:00')
-                            try:
-                                return datetime.datetime.fromisoformat(val_clean)
-                            except ValueError:
-                                val_clean = val.split('+')[0].split('-')
-                                val_clean = '-'.join(val_clean[:3]) + val_clean[3] if len(val_clean) > 3 else '-'.join(val_clean)
-                                val_clean = val_clean.split('.')[0]
-                                return datetime.datetime.fromisoformat(val_clean)
-                        else:
-                            return val
-                    
-                    start_dt = to_datetime(start_val)
-                    finish_dt = to_datetime(finish_val)
-                    # FIX D: Business days INCLUSIVE - Duration must match Start/Finish span
                     biz_days_inclusive = calculate_business_days_between(start_dt.date(), finish_dt.date())
-                    duration_days = max(1, biz_days_inclusive)
+                    duration_days = max(1, biz_days_inclusive - 1) if biz_days_inclusive > 1 else max(0, biz_days_inclusive)
                     dur_minutes = duration_days * 480 if duration_days > 0 else 0
-                except Exception as dur_err:
-                    # GPT 5.2 PRO: Fall back to DurationHours from uid_to_sched (already business-day based)
-                    # This ensures Duration is still derived from schedule, not Work
-                    sched_dur_hours = uid_to_sched.get(r["UID"], {}).get("DurationHours", 8.0)
-                    if sched_dur_hours and not pd.isna(sched_dur_hours):
-                        dur_minutes = int(sched_dur_hours * 60)
+                except Exception:
+                    # Fallback: use work-based calculation
+                    work_hours = work_minutes / 60.0
+                    if work_hours == 0:
+                        dur_minutes = 0
                     else:
-                        dur_minutes = 480  # 1 business day minimum
-                    print(f"[DURATION WARNING] Used DurationHours fallback for task '{name_txt[:40]}': {dur_minutes}m (parse error: {dur_err})")
+                        import math
+                        required_days = max(1, math.ceil(work_hours / 8.0))
+                        dur_minutes = required_days * 480
                 
                 SubElement(task, "Duration").text = f"PT{dur_minutes}M"
                 
@@ -16042,10 +15444,6 @@ def convert_excel_to_mspdi(
             return wbs
         
         # Build assignments for all tasks (including multi-assignment merged tasks)
-        # 3-LEVEL HIERARCHY: Priority order:
-        #   1. Assignments_JSON field (new L4 task structure) 
-        #   2. multi_assignment flag (legacy merged tasks)
-        #   3. Pre-built assignments list (legacy single-assignment)
         assign_uid_counter = 1
         for row in rows:
             task_uid = row["UID"]
@@ -16055,58 +15453,8 @@ def convert_excel_to_mspdi(
                 print(f"[XML EXPORT] 🚫 Skipping assignment for summary task UID {task_uid} (summary tasks should have no assignments)")
                 continue
             
-            # =========================================================================
-            # 3-LEVEL HIERARCHY: Check for Assignments_JSON (L4 tasks with role metadata)
-            # =========================================================================
-            assignments_json = row.get("Assignments_JSON", [])
-            if assignments_json and isinstance(assignments_json, list) and len(assignments_json) > 0:
-                # L4 task with embedded assignments - create MSP Assignment for each role
-                for assign_data in assignments_json:
-                    assignment = SubElement(assignments_elem, "Assignment")
-                    SubElement(assignment, "UID").text = str(assign_uid_counter)
-                    assign_uid_counter += 1
-                    
-                    SubElement(assignment, "TaskUID").text = str(task_uid)
-                    
-                    # Find resource UID for this role
-                    resource_name = assign_data.get("role") or assign_data.get("resource_name") or "Unassigned"
-                    res_uid = res_name_to_uid.get(resource_name) or res_name_to_uid.get("Unassigned") or 1
-                    SubElement(assignment, "ResourceUID").text = str(res_uid)
-                    
-                    SubElement(assignment, "Start").text = uid_to_sched[task_uid]["Start"]
-                    SubElement(assignment, "Finish").text = uid_to_sched[task_uid]["Finish"]
-                    
-                    # Get hours from assignment data
-                    work_hours = float(assign_data.get("hours") or assign_data.get("work_hours") or 0)
-                    work_min = work_hours * 60
-                    dur_hours = uid_to_sched[task_uid].get('DurationHours', 0)
-                    dur_min = dur_hours * 60
-                    # Use actual duration for accurate Units calculation (no 480-minute rounding)
-                    units = 0 if dur_min == 0 else work_min / dur_min
-                    
-                    SubElement(assignment, "Units").text = str(units)
-                    SubElement(assignment, "Work").text = f"PT{int(work_min)}M"
-                    
-                    # BACKWARD COMPATIBILITY: Zero cost only if parent deliverable has FixedCost
-                    # Otherwise, use hourly rate calculation (legacy behavior)
-                    deliv_wbs = get_deliverable_wbs(row.get("WBS", ""))
-                    parent_fixed_cost = deliverable_fixed_costs.get(deliv_wbs, 0)
-                    if parent_fixed_cost > 0:
-                        SubElement(assignment, "Cost").text = "0.00"
-                    else:
-                        # Use rate from assignment data or lookup
-                        rate = float(assign_data.get("rate") or 0)
-                        if rate == 0:
-                            rate = _std_rate_for(resource_name, pricing_mode, rate_band, blended_rate, DB)
-                        cost = work_hours * rate
-                        SubElement(assignment, "Cost").text = f"{cost:.2f}"
-                
-                print(f"[XML EXPORT] 📋 Created {len(assignments_json)} MSP Assignments from Assignments_JSON for task: {row['Name'][:50]} (UID {task_uid})")
-            
-            # =========================================================================
-            # LEGACY: Check for multi_assignment flag (merged tasks)
-            # =========================================================================
-            elif row.get("multi_assignment") and "assignments" in row:
+            # Check if this is a multi-assignment merged task
+            if row.get("multi_assignment") and "assignments" in row:
                 # Multi-assignment task - create multiple Assignment elements
                 for assign_data in row["assignments"]:
                     assignment = SubElement(assignments_elem, "Assignment")
@@ -16147,10 +15495,6 @@ def convert_excel_to_mspdi(
                         SubElement(assignment, "Cost").text = f"{cost:.2f}"
                     
                 print(f"[XML EXPORT] 👥 Created {len(row['assignments'])} assignments for multi-assignment task: {row['Name'][:50]} (UID {task_uid})")
-            
-            # =========================================================================
-            # LEGACY: Use pre-built assignments list
-            # =========================================================================
             else:
                 # Single-assignment task - use original logic
                 # Find the assignment for this task from the pre-built assignments list
@@ -16257,18 +15601,14 @@ def convert_excel_to_mspdi(
             outline_level = wbs.count(".") + 1
             wbs_to_outline[wbs] = outline_level
         
-        # Filter edges: 
-        # Only filter CROSS-DELIVERABLE L3+ edges (keep dependencies internal to their deliverable)
-        # NOTE: L4+ → L4+ (leaf-to-leaf) edges are now ALLOWED for intra-component waterfall
-        # The effort-based scheduler creates FS dependencies between phases:
-        # general → internal_review → client_review → qa
+        # Filter edges: keep L3+ edges only if same root deliverable
         filtered_edges = set()
         cross_deliv_dropped = 0
         for pred_wbs, succ_wbs in all_edges:
             pred_level = wbs_to_outline.get(pred_wbs, 0)
             succ_level = wbs_to_outline.get(succ_wbs, 0)
             
-            # Only filter CROSS-deliverable L3+ edges - intra-component L4 deps are allowed
+            # Only filter if BOTH tasks are L3+ (OutlineLevel >= 3)
             if pred_level >= 3 and succ_level >= 3:
                 pred_deliv = get_root_deliverable_wbs(pred_wbs)
                 succ_deliv = get_root_deliverable_wbs(succ_wbs)
@@ -16278,7 +15618,7 @@ def convert_excel_to_mspdi(
                     cross_deliv_dropped += 1
                     continue
             
-            # Keep the edge (including L4+ intra-component edges for waterfall)
+            # Keep the edge
             filtered_edges.add((pred_wbs, succ_wbs))
         
         if cross_deliv_dropped > 0:
@@ -16289,25 +15629,12 @@ def convert_excel_to_mspdi(
         
         # Add PredecessorLink elements for all final edges
         # WATERFALL FIX: Use wbs_to_new_uid which has remapped UIDs after chronological sort
-        # ASSIGNMENT FIX: Apply uid_alias_map to translate original UIDs to assignment UIDs
         print(f"[XML-EXPORT] Writing {len(all_edges)} PredecessorLink elements...")
         skipped_zero_duration = 0
-        alias_translations = 0
         for pred_wbs, succ_wbs in all_edges:
-            pred_uid_raw = wbs_to_new_uid.get(pred_wbs)
-            succ_uid_raw = wbs_to_new_uid.get(succ_wbs)
-            if pred_uid_raw and succ_uid_raw:
-                # CRITICAL FIX: Apply uid_alias_map to translate UIDs for assignment tasks
-                # When assignments are expanded, original UIDs are replaced with assignment UIDs
-                # The uid_alias_map maps: original_uid → first_assignment_uid (or self for non-assignments)
-                pred_uid = uid_alias_map.get(pred_uid_raw, pred_uid_raw)
-                succ_uid = uid_alias_map.get(succ_uid_raw, succ_uid_raw)
-                
-                if pred_uid != pred_uid_raw or succ_uid != succ_uid_raw:
-                    alias_translations += 1
-                    if alias_translations <= 5:  # Log first 5 translations
-                        print(f"[DEP-ALIAS] Translated: {pred_uid_raw}→{pred_uid}, {succ_uid_raw}→{succ_uid}")
-                
+            pred_uid = wbs_to_new_uid.get(pred_wbs)
+            succ_uid = wbs_to_new_uid.get(succ_wbs)
+            if pred_uid and succ_uid:
                 # Find the successor task element and add a PredecessorLink (MSPDI: no wrapper)
                 for task_elem in tasks_elem.findall("Task"):
                     task_uid_elem = task_elem.find("UID")
@@ -16330,134 +15657,8 @@ def convert_excel_to_mspdi(
                         SubElement(pred_link, "LagFormat").text = "7"     # 7 = days
                         break
         
-        if alias_translations > 0:
-            print(f"[DEP-ALIAS] ✅ Translated {alias_translations} dependency UIDs via uid_alias_map")
-        
         if skipped_zero_duration > 0:
             print(f"[VALIDATION] ⏭️  Skipped {skipped_zero_duration} PredecessorLink(s) with zero-duration tasks")
-
-        # ═══════════════════════════════════════════════════════════════════════════
-        # EFFORT-BASED WATERFALL: Build intra-component FS dependencies between phases
-        # This creates general → internal_review → client_review → qa sequencing
-        # ═══════════════════════════════════════════════════════════════════════════
-        if PHASE_WINDOW_ENABLED:
-            print(f"\n[EFFORT WATERFALL] Building intra-component phase FS links...")
-            
-            # Phase order for waterfall
-            PHASE_ORDER = ["general", "internal_review", "client_review", "qa"]
-            
-            # Build lookup from task name to phase_window from compressed_timeline
-            # This uses the scheduler's actual phase assignments instead of name heuristics
-            task_phase_lookup: Dict[str, str] = {}  # task_name_lower -> phase
-            if compressed_timeline:
-                timeline_tasks = compressed_timeline.get("tasks", [])
-                for task in timeline_tasks:
-                    task_name = task.get("name", "") or task.get("Name", "")
-                    phase = task.get("phase_window", "")  # Set by effort scheduler
-                    if task_name and phase:
-                        task_phase_lookup[task_name.lower().strip()] = phase
-                print(f"[EFFORT WATERFALL] Loaded {len(task_phase_lookup)} phase_window assignments from scheduler")
-            
-            def classify_task_phase(task_name: str) -> str:
-                """Classify task using scheduler metadata first, then name heuristics."""
-                # First, try scheduler metadata
-                name_key = task_name.lower().strip()
-                if name_key in task_phase_lookup:
-                    return task_phase_lookup[name_key]
-                
-                # Fallback to name heuristics
-                name_lower = task_name.lower()
-                if 'qa' in name_lower or 'quality' in name_lower:
-                    return 'qa'
-                elif 'client' in name_lower:
-                    return 'client_review'
-                elif 'internal' in name_lower:
-                    return 'internal_review'
-                else:
-                    return 'general'
-            
-            # Group L4 tasks by component key (deliverable|component)
-            component_phase_tasks: Dict[str, Dict[str, List]] = {}  # comp_key -> phase -> [task_elems]
-            
-            for task_elem in tasks_elem.findall("Task"):
-                outline_elem = task_elem.find("OutlineLevel")
-                uid_elem = task_elem.find("UID")
-                name_elem = task_elem.find("Name")
-                wbs_elem = task_elem.find("WBS")
-                finish_elem = task_elem.find("Finish")
-                
-                if not all([outline_elem, uid_elem, name_elem, wbs_elem, finish_elem]):
-                    continue
-                
-                outline_level = int(outline_elem.text)
-                
-                # Only process L4+ leaf tasks
-                if outline_level < 4:
-                    continue
-                
-                task_name = name_elem.text or ""
-                wbs = wbs_elem.text or ""
-                uid = int(uid_elem.text)
-                finish_str = finish_elem.text or ""
-                
-                # Determine component key from WBS (first 3 segments: 1.X.Y)
-                wbs_parts = wbs.split(".")
-                if len(wbs_parts) < 3:
-                    continue
-                comp_key = ".".join(wbs_parts[:3])  # e.g., "1.2.3"
-                
-                # Classify task into phase using scheduler metadata or name heuristics
-                phase = classify_task_phase(task_name)
-                
-                if comp_key not in component_phase_tasks:
-                    component_phase_tasks[comp_key] = {p: [] for p in PHASE_ORDER}
-                
-                component_phase_tasks[comp_key][phase].append({
-                    'elem': task_elem,
-                    'uid': uid,
-                    'finish': finish_str,
-                    'name': task_name
-                })
-            
-            # Build FS links between phases
-            waterfall_links_added = 0
-            for comp_key, phases in component_phase_tasks.items():
-                prev_phase_last_uid = None
-                
-                for phase in PHASE_ORDER:
-                    phase_tasks = phases.get(phase, [])
-                    if not phase_tasks:
-                        continue
-                    
-                    # Add FS predecessor to each task in this phase from previous phase's last task
-                    if prev_phase_last_uid is not None:
-                        for task_info in phase_tasks:
-                            task_elem = task_info['elem']
-                            
-                            # Check if this predecessor already exists
-                            already_has_pred = False
-                            for existing_pred in task_elem.findall("PredecessorLink"):
-                                pred_uid_elem = existing_pred.find("PredecessorUID")
-                                if pred_uid_elem is not None and pred_uid_elem.text == str(prev_phase_last_uid):
-                                    already_has_pred = True
-                                    break
-                            
-                            if not already_has_pred:
-                                pred_link = SubElement(task_elem, "PredecessorLink")
-                                SubElement(pred_link, "PredecessorUID").text = str(prev_phase_last_uid)
-                                SubElement(pred_link, "Type").text = "1"  # Finish-to-Start
-                                SubElement(pred_link, "CrossProject").text = "0"
-                                SubElement(pred_link, "LinkLag").text = "0"
-                                SubElement(pred_link, "LagFormat").text = "7"
-                                waterfall_links_added += 1
-                    
-                    # Find the last-finishing task in this phase (to be predecessor for next phase)
-                    if phase_tasks:
-                        # Sort by finish date to find the last one
-                        sorted_tasks = sorted(phase_tasks, key=lambda t: t['finish'], reverse=True)
-                        prev_phase_last_uid = sorted_tasks[0]['uid']
-            
-            print(f"[EFFORT WATERFALL] Added {waterfall_links_added} intra-component phase FS links across {len(component_phase_tasks)} components")
 
         # ═══════════════════════════════════════════════════════════════════════════
         # TIGHT WATERFALL: Build L2-only Finish-to-Start chain between deliverables
@@ -16562,15 +15763,9 @@ def convert_excel_to_mspdi(
             
             # Sort by WBS order (natural order: 1.1, 1.2, 1.3, ...)
             def wbs_sort_key(item):
-                """Sort WBS segments using tuple of (type, value) to avoid mixed int/str comparison."""
+                """Sort WBS segments numerically (handles 1.10 > 1.2)"""
                 parts = item["wbs"].split(".")
-                key = []
-                for p in parts:
-                    try:
-                        key.append((0, int(p)))  # Numeric: (0, int_value)
-                    except ValueError:
-                        key.append((1, p))  # Text: (1, str_value)
-                return tuple(key)
+                return [int(p) if p.isdigit() else p for p in parts]
             
             l2_deliverables.sort(key=wbs_sort_key)
             
@@ -16953,8 +16148,9 @@ def convert_excel_to_mspdi(
         except Exception as e:
             print(f"[MSPDI Validation] Could not validate dates: {e}")
 
-        # Log hierarchy info (no longer skipping any levels)
-        print(f"[WORKFRONT] ✅ Exported full 4-level hierarchy (Project/Deliverable/Component/Task)")
+        # Log skipped components
+        if skipped_components > 0:
+            print(f"[WORKFRONT] 🚫 Skipped {skipped_components} components (OutlineLevel > 3) per depth limit")
         
         # ═══════════════════════════════════════════════════════════════════════════
         # WORKFRONT CLEANUP: Strip problematic elements for clean import
@@ -16962,52 +16158,24 @@ def convert_excel_to_mspdi(
         # Snap times to 09:00/17:00, No constraints on summary tasks
         # CRITICAL: Always run cleanup for Workfront compatibility (not conditional)
         # ═══════════════════════════════════════════════════════════════════════════
-        if True:  # Always run Workfront cleanup (selective based on flags)
+        if True:  # Always run Workfront cleanup
             print(f"\n[WORKFRONT CLEANUP] Applying cleanup rules for Workfront import...")
             cleanup_stats = {"resources_removed": 0, "assignments_removed": 0, "fixedcost_removed": 0, 
                             "times_snapped": 0, "summary_constraints_removed": 0}
             
-            # 1. GATED: Only remove Resources/Assignments if STRIP_ASSIGNMENTS_FOR_WF is True
-            # By default (False), keep Resources and Assignments for Workfront assignment breakdowns
-            if STRIP_ASSIGNMENTS_FOR_WF:
-                # Remove <Resources> element entirely
-                resources_elem_to_remove = project.find("Resources")
-                if resources_elem_to_remove is not None:
-                    project.remove(resources_elem_to_remove)
-                    cleanup_stats["resources_removed"] = 1
-                    print(f"[WORKFRONT CLEANUP] 🗑️ Removed <Resources> element (STRIP_ASSIGNMENTS_FOR_WF=True)")
-                
-                # Remove <Assignments> element entirely
-                assignments_elem_to_remove = project.find("Assignments")
-                if assignments_elem_to_remove is not None:
-                    project.remove(assignments_elem_to_remove)
-                    cleanup_stats["assignments_removed"] = 1
-                    print(f"[WORKFRONT CLEANUP] 🗑️ Removed <Assignments> element (STRIP_ASSIGNMENTS_FOR_WF=True)")
-            else:
-                print(f"[WORKFRONT CLEANUP] ✅ Kept <Resources> and <Assignments> (STRIP_ASSIGNMENTS_FOR_WF=False)")
+            # 1. Remove <Resources> element entirely
+            resources_elem_to_remove = project.find("Resources")
+            if resources_elem_to_remove is not None:
+                project.remove(resources_elem_to_remove)
+                cleanup_stats["resources_removed"] = 1
+                print(f"[WORKFRONT CLEANUP] 🗑️ Removed <Resources> element")
             
-            # 2. FIX C: Remove dangling PredecessorUIDs (prevents Workfront "can't read file" error)
-            # This is the #1 cause of Workfront rejections - predecessors pointing to non-existent tasks
-            all_task_uids_cleanup = set()
-            for task_elem in tasks_elem.findall("Task"):
-                uid_elem = task_elem.find("UID")
-                if uid_elem is not None and uid_elem.text:
-                    all_task_uids_cleanup.add(uid_elem.text)
-            
-            dangling_pred_removed = 0
-            for task_elem in tasks_elem.findall("Task"):
-                for pred_link in list(task_elem.findall("PredecessorLink")):  # list() to allow modification during iteration
-                    pred_uid_elem = pred_link.find("PredecessorUID")
-                    if pred_uid_elem is not None and pred_uid_elem.text:
-                        if pred_uid_elem.text not in all_task_uids_cleanup:
-                            # Remove this dangling predecessor reference
-                            task_elem.remove(pred_link)
-                            dangling_pred_removed += 1
-            
-            if dangling_pred_removed > 0:
-                print(f"[WORKFRONT CLEANUP] 🗑️ Removed {dangling_pred_removed} dangling PredecessorLink(s) referencing non-existent tasks")
-            else:
-                print(f"[WORKFRONT CLEANUP] ✅ All PredecessorLinks reference valid tasks")
+            # 2. Remove <Assignments> element entirely
+            assignments_elem_to_remove = project.find("Assignments")
+            if assignments_elem_to_remove is not None:
+                project.remove(assignments_elem_to_remove)
+                cleanup_stats["assignments_removed"] = 1
+                print(f"[WORKFRONT CLEANUP] 🗑️ Removed <Assignments> element")
             
             # 3. Remove FixedCost and CostType from all tasks
             for task_elem in tasks_elem.findall("Task"):
@@ -17135,221 +16303,7 @@ def convert_excel_to_mspdi(
         
         # Validation 3: Verify exported task count
         exported_task_count = len(tasks_elem.findall("Task"))
-        print(f"[VALIDATION] 📊 Exported {exported_task_count} tasks")
-        
-        # Validation 4: Check Max OutlineLevel >= 4 (full 4-level hierarchy)
-        # Count by WBS depth (more reliable than OutlineLevel element which may be capped)
-        max_wbs_depth = 0
-        for task_elem in tasks_elem.findall("Task"):
-            wbs_elem = task_elem.find("WBS")
-            if wbs_elem is not None and wbs_elem.text:
-                wbs_text = wbs_elem.text
-                # Skip anchor tasks (ANCHOR_ prefix) - they don't count for hierarchy depth
-                if wbs_text.startswith("ANCHOR_") or ".START" in wbs_text or ".END" in wbs_text:
-                    continue
-                # Count dots + 1 = depth (e.g., "1.2.3.4" = 4 dots = depth 4)
-                depth = wbs_text.count(".") + 1
-                max_wbs_depth = max(max_wbs_depth, depth)
-        
-        if max_wbs_depth >= 4:
-            print(f"[VALIDATION] ✅ Max hierarchy depth (WBS): {max_wbs_depth} (≥4 required): PASS")
-        else:
-            validation_errors.append(f"Max hierarchy depth is {max_wbs_depth}, expected ≥4 for full hierarchy")
-            print(f"[VALIDATION] ⚠️ Max hierarchy depth: {max_wbs_depth} (expected ≥4 for Deliverable/Component/Task hierarchy)")
-        
-        # Validation 5: Check Resources count > 0 (if not stripped)
-        resources_elem_check = project.find("Resources")
-        resource_count = len(resources_elem_check.findall("Resource")) if resources_elem_check is not None else 0
-        if STRIP_ASSIGNMENTS_FOR_WF:
-            print(f"[VALIDATION] ℹ️ Resources count: N/A (STRIP_ASSIGNMENTS_FOR_WF=True)")
-        elif resource_count > 0:
-            print(f"[VALIDATION] ✅ Resources count: {resource_count} (PASS)")
-        else:
-            validation_errors.append("No Resources found - assignment breakdowns won't work")
-            print(f"[VALIDATION] ⚠️ Resources count: 0 (WARNING - no role assignments)")
-        
-        # Validation 6: Check Assignments count > 0 (if not stripped)
-        assignments_elem_check = project.find("Assignments")
-        assignment_count = len(assignments_elem_check.findall("Assignment")) if assignments_elem_check is not None else 0
-        if STRIP_ASSIGNMENTS_FOR_WF:
-            print(f"[VALIDATION] ℹ️ Assignments count: N/A (STRIP_ASSIGNMENTS_FOR_WF=True)")
-        elif assignment_count > 0:
-            print(f"[VALIDATION] ✅ Assignments count: {assignment_count} (PASS)")
-        else:
-            validation_errors.append("No Assignments found - assignment breakdowns won't work")
-            print(f"[VALIDATION] ⚠️ Assignments count: 0 (WARNING - no task assignments)")
-        
-        # Validation 7: No Assignments for summary tasks
-        if assignments_elem_check is not None:
-            summary_assignment_errors = []
-            for assignment_elem in assignments_elem_check.findall("Assignment"):
-                task_uid_elem = assignment_elem.find("TaskUID")
-                if task_uid_elem is not None and task_uid_elem.text:
-                    task_uid = int(task_uid_elem.text)
-                    if task_uid in summary_task_uids:
-                        summary_assignment_errors.append(task_uid)
-            
-            if not summary_assignment_errors:
-                print(f"[VALIDATION] ✅ No assignments on summary tasks: PASS")
-            else:
-                validation_errors.append(f"Found {len(summary_assignment_errors)} assignments on summary tasks")
-                print(f"[VALIDATION] ⚠️ Found {len(summary_assignment_errors)} assignments on summary tasks (should be 0)")
-        
-        # Validation 8: Every PredecessorUID exists in Tasks
-        all_task_uids = set()
-        for task_elem in tasks_elem.findall("Task"):
-            uid_elem = task_elem.find("UID")
-            if uid_elem is not None and uid_elem.text:
-                all_task_uids.add(uid_elem.text)
-        
-        missing_pred_uids = []
-        for task_elem in tasks_elem.findall("Task"):
-            for pred_link in task_elem.findall("PredecessorLink"):
-                pred_uid_elem = pred_link.find("PredecessorUID")
-                if pred_uid_elem is not None and pred_uid_elem.text:
-                    if pred_uid_elem.text not in all_task_uids:
-                        missing_pred_uids.append(pred_uid_elem.text)
-        
-        if not missing_pred_uids:
-            print(f"[VALIDATION] ✅ All PredecessorUIDs exist in Tasks: PASS")
-        else:
-            validation_errors.append(f"Found {len(missing_pred_uids)} PredecessorUIDs referencing non-existent tasks")
-            print(f"[VALIDATION] ⚠️ Found {len(missing_pred_uids)} PredecessorUIDs referencing non-existent tasks: {missing_pred_uids[:5]}")
-        
-        # ═══════════════════════════════════════════════════════════════════════════
-        # HARD VALIDATOR: Critical checks that MUST pass (per Workfront-safe spec)
-        # ═══════════════════════════════════════════════════════════════════════════
-        hard_validation_errors = []
-        
-        # HARD VALIDATION 1: UID Uniqueness - Every task UID must be unique
-        uid_counts = {}
-        for task_elem in tasks_elem.findall("Task"):
-            uid_elem = task_elem.find("UID")
-            if uid_elem is not None and uid_elem.text:
-                uid = uid_elem.text
-                uid_counts[uid] = uid_counts.get(uid, 0) + 1
-        
-        duplicate_uids = [uid for uid, count in uid_counts.items() if count > 1]
-        if duplicate_uids:
-            hard_validation_errors.append(f"Duplicate task UIDs: {duplicate_uids[:5]}")
-            print(f"[HARD VALIDATOR] ❌ Duplicate UIDs found: {duplicate_uids[:5]}")
-        else:
-            print(f"[HARD VALIDATOR] ✅ All task UIDs are unique: PASS")
-        
-        # HARD VALIDATION 2: Assignment Reference Check - Every Assignment's TaskUID and ResourceUID must exist
-        all_resource_uids = set()
-        resources_check = project.find("Resources")
-        if resources_check is not None:
-            for resource_elem in resources_check.findall("Resource"):
-                res_uid_elem = resource_elem.find("UID")
-                if res_uid_elem is not None and res_uid_elem.text:
-                    all_resource_uids.add(res_uid_elem.text)
-        
-        assignments_check = project.find("Assignments")
-        invalid_assignment_refs = []
-        if assignments_check is not None:
-            for assignment_elem in assignments_check.findall("Assignment"):
-                task_uid_elem = assignment_elem.find("TaskUID")
-                resource_uid_elem = assignment_elem.find("ResourceUID")
-                
-                task_uid = task_uid_elem.text if task_uid_elem is not None else None
-                resource_uid = resource_uid_elem.text if resource_uid_elem is not None else None
-                
-                if task_uid and task_uid not in all_task_uids:
-                    invalid_assignment_refs.append(f"TaskUID {task_uid} not found")
-                if resource_uid and resource_uid not in all_resource_uids and resource_uid != "-65535":
-                    invalid_assignment_refs.append(f"ResourceUID {resource_uid} not found")
-        
-        if invalid_assignment_refs:
-            hard_validation_errors.append(f"Invalid assignment references: {invalid_assignment_refs[:5]}")
-            print(f"[HARD VALIDATOR] ❌ Invalid assignment references: {invalid_assignment_refs[:5]}")
-        else:
-            print(f"[HARD VALIDATOR] ✅ All Assignment TaskUID/ResourceUID references valid: PASS")
-        
-        # HARD VALIDATION 3: Duration Invariant - duration_minutes == business_days(Start, Finish) * 480
-        # Only check leaf tasks (Summary=0) since parents roll up from children
-        # FIX: Exempt zero-duration milestones and same-day tasks
-        duration_mismatches = []
-        for task_elem in tasks_elem.findall("Task"):
-            summary_elem = task_elem.find("Summary")
-            is_summary = summary_elem is not None and summary_elem.text == "1"
-            
-            if is_summary:
-                continue  # Skip summary/parent tasks
-            
-            name_elem = task_elem.find("Name")
-            start_elem = task_elem.find("Start")
-            finish_elem = task_elem.find("Finish")
-            duration_elem = task_elem.find("Duration")
-            uid_elem = task_elem.find("UID")
-            milestone_elem = task_elem.find("Milestone")
-            
-            if not all([start_elem, finish_elem, duration_elem]):
-                continue
-            
-            task_name = name_elem.text if name_elem is not None else "Unknown"
-            task_uid = uid_elem.text if uid_elem is not None else "N/A"
-            
-            # FIX: Skip milestones - they legitimately have 0 duration
-            is_milestone = milestone_elem is not None and milestone_elem.text == "1"
-            if is_milestone:
-                continue
-            
-            try:
-                # Parse dates
-                start_str = start_elem.text[:10] if start_elem.text else None
-                finish_str = finish_elem.text[:10] if finish_elem.text else None
-                
-                if not start_str or not finish_str:
-                    continue
-                
-                start_date = datetime.datetime.strptime(start_str, "%Y-%m-%d").date()
-                finish_date = datetime.datetime.strptime(finish_str, "%Y-%m-%d").date()
-                
-                # Calculate expected duration using shared calendar
-                expected_biz_days = business_days_between(start_date, finish_date)
-                expected_minutes = expected_biz_days * 480  # 8 hours * 60 minutes
-                
-                # Parse actual duration from XML (format: PT{minutes}M or PT{hours}H{minutes}M)
-                duration_str = duration_elem.text or "PT0M"
-                actual_minutes = 0
-                if "H" in duration_str:
-                    # Format: PT{hours}H{minutes}M
-                    import re
-                    match = re.match(r"PT(\d+)H(\d+)?M?", duration_str)
-                    if match:
-                        hours = int(match.group(1))
-                        mins = int(match.group(2)) if match.group(2) else 0
-                        actual_minutes = hours * 60 + mins
-                else:
-                    # Format: PT{minutes}M
-                    actual_minutes = int(duration_str.replace("PT", "").replace("M", "") or 0)
-                
-                # FIX: Skip zero-duration tasks (same-day tasks or milestones not flagged)
-                if actual_minutes == 0 and expected_biz_days <= 1:
-                    continue  # Same-day or milestone, OK
-                
-                # Allow small tolerance (1 business day = 480 min) for edge cases
-                if abs(expected_minutes - actual_minutes) > 480:
-                    duration_mismatches.append(
-                        f"{task_name} (UID {task_uid}): expected {expected_minutes}M ({expected_biz_days}d), got {actual_minutes}M"
-                    )
-            except Exception as e:
-                pass  # Skip tasks with parsing issues
-        
-        if duration_mismatches:
-            hard_validation_errors.append(f"Duration invariant violations: {len(duration_mismatches)} tasks")
-            print(f"[HARD VALIDATOR] ⚠️ Duration invariant mismatches ({len(duration_mismatches)} tasks):")
-            for mismatch in duration_mismatches[:3]:
-                print(f"    - {mismatch}")
-        else:
-            print(f"[HARD VALIDATOR] ✅ Duration invariant (duration = business_days * 480): PASS")
-        
-        # HARD VALIDATION RESULT - Log but don't block export
-        if hard_validation_errors:
-            print(f"[HARD VALIDATOR] ⚠️ {len(hard_validation_errors)} hard validation issue(s) - review for Workfront compatibility")
-        else:
-            print(f"[HARD VALIDATOR] ✅ All hard validation checks passed - export is Workfront-safe")
+        print(f"[VALIDATION] 📊 Exported {exported_task_count} tasks (skipped {skipped_components} components)")
         
         if validation_errors:
             print(f"[VALIDATION] ⚠️ {len(validation_errors)} validation warning(s) detected")
