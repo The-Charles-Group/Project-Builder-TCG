@@ -15651,9 +15651,10 @@ def convert_excel_to_mspdi(
             # Only set Duration/Work for non-summary leaf tasks
             else:
                 # ====================================================================================
-                # ASSIGNMENT-LEVEL DURATION FIX: Use EFFORT-BASED duration (hours × 60 minutes)
-                # instead of calendar span for assignment tasks. This prevents Workfront from
-                # showing inflated Duration values (e.g., 560 days instead of 8 hours).
+                # GPT 5.2 PRO FIX D: Duration = business_minutes_between(Start, Finish) for ALL tasks
+                # Work = planned effort (hours × 60 minutes) - does NOT drive timeline
+                # Duration = schedule window span - ALWAYS derived from Start/Finish business days
+                # This prevents Workfront from recalculating dates on import
                 # ====================================================================================
                 
                 # Get PlannedHours from the row (assignment tasks have this set directly)
@@ -15670,51 +15671,42 @@ def convert_excel_to_mspdi(
                 work_minutes = max(0, int(work_hours * 60))
                 SubElement(task, "Work").text = f"PT{work_minutes}M"
                 
-                # DURATION FIX: For assignment tasks, use EFFORT-BASED duration (hours × 60)
-                # This ensures Workfront shows "1 day" for 8 hours, not "95 days" from span
-                is_assignment_task = r.get("_is_assignment_task", False) or bool(r.get("Role"))
-                
-                if is_assignment_task and work_hours > 0:
-                    # EFFORT-BASED: Duration = Work (hours converted to minutes)
-                    # This is what Workfront expects for actual task effort
-                    dur_minutes = work_minutes
-                    print(f"[DURATION FIX] Assignment task '{name_txt[:50]}' - Effort-based: {work_hours}h = {dur_minutes} minutes")
-                else:
-                    # NON-ASSIGNMENT LEAF: Use calendar span for backwards compatibility
-                    try:
-                        start_val = uid_to_sched[r["UID"]]["Start"]
-                        finish_val = uid_to_sched[r["UID"]]["Finish"]
-                        
-                        def to_datetime(val):
-                            if isinstance(val, datetime.datetime):
-                                return val
-                            elif isinstance(val, str):
-                                val_clean = val.replace('Z', '+00:00')
-                                try:
-                                    return datetime.datetime.fromisoformat(val_clean)
-                                except ValueError:
-                                    val_clean = val.split('+')[0].split('-')
-                                    val_clean = '-'.join(val_clean[:3]) + val_clean[3] if len(val_clean) > 3 else '-'.join(val_clean)
-                                    val_clean = val_clean.split('.')[0]
-                                    return datetime.datetime.fromisoformat(val_clean)
-                            else:
-                                return val
-                        
-                        start_dt = to_datetime(start_val)
-                        finish_dt = to_datetime(finish_val)
-                        # FIX: Business days INCLUSIVE - DO NOT subtract 1
-                        # If Start/Finish are inclusive day bounds, Duration must also be inclusive
-                        biz_days_inclusive = calculate_business_days_between(start_dt.date(), finish_dt.date())
-                        duration_days = max(1, biz_days_inclusive)
-                        dur_minutes = duration_days * 480 if duration_days > 0 else 0
-                    except Exception:
-                        # Fallback: use work-based calculation
-                        if work_hours == 0:
-                            dur_minutes = 0
+                # GPT 5.2 PRO FIX D: Duration ALWAYS from Start/Finish span (business days)
+                # This applies to ALL leaf tasks including assignment tasks
+                try:
+                    start_val = uid_to_sched[r["UID"]]["Start"]
+                    finish_val = uid_to_sched[r["UID"]]["Finish"]
+                    
+                    def to_datetime(val):
+                        if isinstance(val, datetime.datetime):
+                            return val
+                        elif isinstance(val, str):
+                            val_clean = val.replace('Z', '+00:00')
+                            try:
+                                return datetime.datetime.fromisoformat(val_clean)
+                            except ValueError:
+                                val_clean = val.split('+')[0].split('-')
+                                val_clean = '-'.join(val_clean[:3]) + val_clean[3] if len(val_clean) > 3 else '-'.join(val_clean)
+                                val_clean = val_clean.split('.')[0]
+                                return datetime.datetime.fromisoformat(val_clean)
                         else:
-                            import math
-                            required_days = max(1, math.ceil(work_hours / 8.0))
-                            dur_minutes = required_days * 480
+                            return val
+                    
+                    start_dt = to_datetime(start_val)
+                    finish_dt = to_datetime(finish_val)
+                    # FIX D: Business days INCLUSIVE - Duration must match Start/Finish span
+                    biz_days_inclusive = calculate_business_days_between(start_dt.date(), finish_dt.date())
+                    duration_days = max(1, biz_days_inclusive)
+                    dur_minutes = duration_days * 480 if duration_days > 0 else 0
+                except Exception as dur_err:
+                    # GPT 5.2 PRO: Fall back to DurationHours from uid_to_sched (already business-day based)
+                    # This ensures Duration is still derived from schedule, not Work
+                    sched_dur_hours = uid_to_sched.get(r["UID"], {}).get("DurationHours", 8.0)
+                    if sched_dur_hours and not pd.isna(sched_dur_hours):
+                        dur_minutes = int(sched_dur_hours * 60)
+                    else:
+                        dur_minutes = 480  # 1 business day minimum
+                    print(f"[DURATION WARNING] Used DurationHours fallback for task '{name_txt[:40]}': {dur_minutes}m (parse error: {dur_err})")
                 
                 SubElement(task, "Duration").text = f"PT{dur_minutes}M"
                 
@@ -16993,6 +16985,29 @@ def convert_excel_to_mspdi(
                     print(f"[WORKFRONT CLEANUP] 🗑️ Removed <Assignments> element (STRIP_ASSIGNMENTS_FOR_WF=True)")
             else:
                 print(f"[WORKFRONT CLEANUP] ✅ Kept <Resources> and <Assignments> (STRIP_ASSIGNMENTS_FOR_WF=False)")
+            
+            # 2. FIX C: Remove dangling PredecessorUIDs (prevents Workfront "can't read file" error)
+            # This is the #1 cause of Workfront rejections - predecessors pointing to non-existent tasks
+            all_task_uids_cleanup = set()
+            for task_elem in tasks_elem.findall("Task"):
+                uid_elem = task_elem.find("UID")
+                if uid_elem is not None and uid_elem.text:
+                    all_task_uids_cleanup.add(uid_elem.text)
+            
+            dangling_pred_removed = 0
+            for task_elem in tasks_elem.findall("Task"):
+                for pred_link in list(task_elem.findall("PredecessorLink")):  # list() to allow modification during iteration
+                    pred_uid_elem = pred_link.find("PredecessorUID")
+                    if pred_uid_elem is not None and pred_uid_elem.text:
+                        if pred_uid_elem.text not in all_task_uids_cleanup:
+                            # Remove this dangling predecessor reference
+                            task_elem.remove(pred_link)
+                            dangling_pred_removed += 1
+            
+            if dangling_pred_removed > 0:
+                print(f"[WORKFRONT CLEANUP] 🗑️ Removed {dangling_pred_removed} dangling PredecessorLink(s) referencing non-existent tasks")
+            else:
+                print(f"[WORKFRONT CLEANUP] ✅ All PredecessorLinks reference valid tasks")
             
             # 3. Remove FixedCost and CostType from all tasks
             for task_elem in tasks_elem.findall("Task"):
