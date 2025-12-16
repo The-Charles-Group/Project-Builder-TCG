@@ -6594,10 +6594,12 @@ def compress_deliverable_timeline(
         task_start = task.get('start', '')
         task_end = task.get('end', '')
         
+        # GPT 5.2 PRO FIX: Use business-day shifting, not calendar days
+        # Calendar days can push tasks onto weekends, breaking Workfront schedule alignment
         if task_start:
             try:
                 start_dt = datetime.datetime.fromisoformat(task_start.replace('Z', '')).date()
-                new_start_dt = start_dt + datetime.timedelta(days=shift_days)
+                new_start_dt = add_business_days(start_dt, shift_days)
                 new_task['start'] = new_start_dt.isoformat()
             except (ValueError, AttributeError):
                 pass
@@ -6605,7 +6607,7 @@ def compress_deliverable_timeline(
         if task_end:
             try:
                 end_dt = datetime.datetime.fromisoformat(task_end.replace('Z', '')).date()
-                new_end_dt = end_dt + datetime.timedelta(days=shift_days)
+                new_end_dt = add_business_days(end_dt, shift_days)
                 new_task['end'] = new_end_dt.isoformat()
             except (ValueError, AttributeError):
                 pass
@@ -15380,6 +15382,12 @@ def convert_excel_to_mspdi(
         # ====================================================================================
         # Generate XML
         project = Element("Project", xmlns="http://schemas.microsoft.com/project")
+        
+        # GPT 5.2 PRO: Workfront-required header fields BEFORE <Name>
+        # These prevent Workfront from rejecting files with "can't read file" errors
+        SubElement(project, "SaveVersion").text = "14"
+        SubElement(project, "Title").text = (project_name or project_title or "Project")
+        SubElement(project, "Author").text = "Agency Project Builder"
         
         # Project info - use explicit project_name if provided, otherwise fall back to derived title
         SubElement(project, "Name").text = (project_name or project_title)

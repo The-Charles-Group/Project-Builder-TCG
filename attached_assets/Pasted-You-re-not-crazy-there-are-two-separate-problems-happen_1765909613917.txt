@@ -1,0 +1,166 @@
+You’re not crazy — there are two separate problems happening at once:
+	1.	Workfront import rejection (“couldn’t read the file”)
+	2.	Schedule mismatch (app Gantt vs. Workfront dates/durations)
+
+They feed each other: if Step 4 only “compresses/labels” deliverables but doesn’t compute a real task-level schedule, Workfront will re-interpret (or roll up) based on task rows, and you’ll never match.
+
+⸻
+
+1) Why Workfront is rejecting the XML
+
+The smoking gun in the rejected exports
+
+In at least one of the XMLs that’s being rejected (ex: ..._c273a9f3.xml), there are dangling predecessor references:
+	•	Tasks have <PredecessorLink><PredecessorUID>4001</PredecessorUID>...</PredecessorLink>
+	•	But the exported tasks only have UIDs in the ~1..327 range
+
+Workfront’s MSPDI importer is extremely brittle here: if a predecessor references a task that isn’t present in the <Tasks> list, it often throws the generic “can’t read file” toast.
+
+The most common way this happens in your code
+
+Your doc shows a branch that skips OutlineLevel > 3 (“skip components”) during XML export, which guarantees you’ll create dangling dependency references whenever dependencies point at filtered-out tasks.  ￼
+
+Even if you later “clean” predecessor links, it’s easy to miss some edges unless you validate after all filtering + remapping.
+
+Workfront header requirements
+
+Your doc also correctly notes Workfront can reject files if MSPDI header fields aren’t present before <Name>.  ￼
+Your Workfront-exported XML includes things like <SaveVersion>, <Title>, <Author>, <CalendarUID>, <MinutesPerDay>, <DurationFormat>, etc.  ￼
+Some of the app-generated files start immediately with <Name>, which is risky.
+
+⸻
+
+2) Why your durations/end-dates don’t match (even when hours + starts do)
+
+What’s happening
+
+Workfront will either:
+	•	trust Start + Duration and recompute Finish, or
+	•	trust Start/Finish and recompute Duration, or
+	•	roll up summary task dates from children
+
+If your XML has Start/Finish + Duration that don’t agree, Workfront tends to “pick a side” and your Due dates drift.
+
+Your own doc shows the exact off-by-one bug that causes this:
+duration_days = max(1, biz_days_inclusive - 1)  ￼
+That makes Duration shorter than the Start/Finish span, so Workfront will shift the Finish earlier.
+
+Your doc later shows the correct rule (“DO NOT subtract 1”).  ￼
+So the fix is: Duration must be derived from Start/Finish consistently (or vice versa), everywhere, not in only one branch.
+
+Another mismatch source: Step 4 “compression” is shifting by calendar days
+
+In your “compress” logic, you’re shifting task dates using datetime.timedelta(days=shift_days).  ￼
+That pushes tasks onto weekends, which then blows up “working duration” expectations and can create Start/Finish/Durations that Workfront reinterprets.
+
+Also: Step 4 is writing timeline_start/timeline_end onto every task using the deliverable window mapping  ￼ — which makes the UI look “right” at deliverable level while the underlying task schedule may not be truly computed the same way Workfront will schedule.
+
+⸻
+
+3) Answer to your key question: “What if the app computed the Gantt at task level in Step 4 — would that help?”
+
+Yes. That’s the only way you’ll get stable alignment.
+
+Because in Workfront:
+	•	summary task duration/dates are rollups from children
+	•	dependencies are interpreted at the task layer
+	•	the Gantt you “like to see” structurally is built from leaf tasks
+
+So if Step 4 only computes deliverable spans (and then stretches/labels tasks), you’ll always get mismatches.
+
+⸻
+
+4) What the app Gantt will look like after the task-level fix
+
+If Step 4 actually schedules leaf tasks (client_review/general/internal_review/qa) with real Start/Finish dates (Mon–Fri), then:
+	•	Deliverables will match Workfront, because deliverables will be min(child_start) → max(child_finish)
+	•	The app will no longer “guess” duration only from total hours; it will reflect the same rollup Workfront uses
+	•	You should expect:
+	•	working duration in the app = working duration in Workfront
+	•	If you keep “review windows” (longer spans with low hours), the Gantt will be longer than pure effort-days (and that’s normal)
+	•	If instead you make every leaf task duration derive from work-hours only, then the whole schedule will get shorter (and Workfront will match that shorter schedule)
+
+And yes: you’ll still see cases like “3 hours” but “12 days” if you’re treating client review as a window (hours = effort, duration = elapsed working days). That’s not a bug — it’s a modeling choice.
+
+⸻
+
+5) Concrete instructions to give the Replit Agent + Architect
+
+Agent (implementation checklist)
+	1.	Stop filtering out hierarchy levels in export
+	•	Remove the “OutlineLevel ≤ 3” skip. It’s explicitly shown in the doc and it creates invalid references.  ￼
+	•	If you must cap what the UI shows, only cap in UI — never in export.
+	2.	Add a hard validator before writing the XML
+	•	Build sets:
+	•	task_uids = {Task.UID}
+	•	resource_uids = {Resource.UID}
+	•	Validate:
+	•	every PredecessorUID ∈ task_uids
+	•	every Assignment.TaskUID ∈ task_uids
+	•	every Assignment.ResourceUID ∈ resource_uids
+	•	If any fail, block export and show the exact list of offending tasks in the UI.
+	3.	Duration consistency rule: pick ONE canonical truth
+	•	Best for Workfront stability: Start/Finish are truth; Duration is derived from Start/Finish (business-day span). Your doc already calls this out as critical.  ￼
+	•	Remove the biz_days_inclusive - 1 pattern.  ￼
+	•	Use the “DO NOT subtract 1” rule.  ￼
+	4.	Fix Step 4 scheduling: compute leaf tasks first
+	•	In Step 4 timeline generation:
+	•	schedule leaf tasks (general → internal_review → client_review → qa) sequentially inside each component
+	•	schedule components sequentially inside deliverable
+	•	roll up deliverable start/end from children
+	•	DO NOT shift using timedelta(days=...) for anything calendar-related. Use working-day add. The current code uses calendar days.  ￼
+	5.	Do not write deliverable timeline fields onto every task
+	•	Right now, timeline_start/timeline_end are being stamped onto tasks using deliverable mapping.  ￼
+	•	Change that so:
+	•	deliverables have timeline_*
+	•	tasks use their real start/end
+	•	Otherwise UI will keep drifting from what XML/Workfront are actually doing.
+	6.	Keep Workfront-required header fields before <Name>
+	•	Your doc already states this requirement.  ￼
+	•	Mimic the Workfront-exported header set.  ￼
+
+Architect (design decision you must lock)
+
+Pick which model is “truth” for leaf tasks:
+	•	Model A (Window-based phases)
+client_review/internal_review/qa are time windows (duration comes from phase policy), hours are just effort.
+✅ Matches typical agency reality.
+✅ Explains “3 hours but 12 days.”
+✅ Easy to make waterfall.
+❗ Requires explicit phase-duration allocation rules.
+	•	Model B (Effort-only)
+Duration is derived directly from hours (hours / 8h/day), maybe rounded.
+✅ Simple.
+✅ No “wait window” weirdness.
+❗ Schedules will get shorter than your current app spans.
+
+If your goal is “app timeline spans must remain as-is and match Workfront,” you almost certainly want Model A, but with sequential ordering so the Gantt looks like a waterfall (not everything starting on the same day).
+
+⸻
+
+6) Working patched XML files you can try right now
+
+I generated two patched XMLs from your uploads with these fixes applied:
+	•	Workfront MSPDI header fields inserted (copied from your Workfront-exported XML)
+	•	Dangling predecessor links removed
+	•	Summary flags corrected for parent tasks
+
+Try importing these:
+	•	Download PATCHED_c273a9f3_importable.xml￼
+	•	Download PATCHED_b6705923_importable.xml￼
+
+If Workfront still rejects these, the next thing to check is whether Workfront is choking on manual scheduling tags (ManuallyScheduled, ManualStart, etc.) or a specific unexpected field order — but the two biggest causes (“missing header” and “dangling predecessor UID”) are handled here.
+
+⸻
+
+7) Quick sanity explanation for the “3 hours but 12 days” thing
+
+In Workfront:
+	•	Assignment Breakdown = effort (hours)
+	•	Duration = scheduled working-day span between Start and Finish
+
+Those are allowed to differ. If you don’t want them to differ, you must adopt Model B and ensure Finish is computed from work-hours (and then Duration matches).
+
+⸻
+
+If you want, I can also generate a “debug CSV” view from your XML (task UID, WBS, Start, Finish, Duration minutes, predecessors, weekend flags) so you can see exactly what Workfront is about to ingest — but the big actionable fix is: Step 4 must schedule the leaf tasks using working days, and export must keep all referenced tasks + dependencies valid.
