@@ -6575,38 +6575,29 @@ def compress_deliverable_timeline(
         shift_days = mapping['shift_days']
         
         if shift_days == 0:
-            # GPT 5.2 PRO FIX: Only stamp timeline_* fields onto deliverable-level tasks (level == 2)
-            # Child tasks should use their REAL start/end to prevent UI/Workfront drift
+            # TICKET: Even unshifted tasks need working duration fields for frontend display
             task_copy = task.copy()
-            task_level = task.get('level')
-            is_deliverable = (task_level == 2 or task_level == 'deliverable')
-            if is_deliverable:
-                task_copy['timeline_working_duration_days'] = mapping['duration_business_days']
-                task_copy['timeline_start'] = mapping['new_start']
-                task_copy['timeline_end'] = mapping['new_end']
+            task_copy['timeline_working_duration_days'] = mapping['duration_business_days']
+            task_copy['timeline_start'] = mapping['new_start']
+            task_copy['timeline_end'] = mapping['new_end']
             compressed_tasks.append(task_copy)
             continue
         
         new_task = task.copy()
         
-        # GPT 5.2 PRO FIX: Only stamp timeline_* fields onto deliverable-level tasks (level == 2)
-        # Child tasks should use their REAL start/end (computed via shifting below)
-        task_level = task.get('level')
-        is_deliverable = (task_level == 2 or task_level == 'deliverable')
-        if is_deliverable:
-            new_task['timeline_working_duration_days'] = mapping['duration_business_days']
-            new_task['timeline_start'] = mapping['new_start']
-            new_task['timeline_end'] = mapping['new_end']
+        # TICKET: Add working duration fields to task for frontend display
+        # This ensures "Working duration (Mon-Fri): X days" shows immediately after Generate AI Timeline
+        new_task['timeline_working_duration_days'] = mapping['duration_business_days']
+        new_task['timeline_start'] = mapping['new_start']
+        new_task['timeline_end'] = mapping['new_end']
         
         task_start = task.get('start', '')
         task_end = task.get('end', '')
         
-        # GPT 5.2 PRO FIX: Use business-day shifting, not calendar days
-        # Calendar days can push tasks onto weekends, breaking Workfront schedule alignment
         if task_start:
             try:
                 start_dt = datetime.datetime.fromisoformat(task_start.replace('Z', '')).date()
-                new_start_dt = add_business_days(start_dt, shift_days)
+                new_start_dt = start_dt + datetime.timedelta(days=shift_days)
                 new_task['start'] = new_start_dt.isoformat()
             except (ValueError, AttributeError):
                 pass
@@ -6614,7 +6605,7 @@ def compress_deliverable_timeline(
         if task_end:
             try:
                 end_dt = datetime.datetime.fromisoformat(task_end.replace('Z', '')).date()
-                new_end_dt = add_business_days(end_dt, shift_days)
+                new_end_dt = end_dt + datetime.timedelta(days=shift_days)
                 new_task['end'] = new_end_dt.isoformat()
             except (ValueError, AttributeError):
                 pass
@@ -15389,12 +15380,6 @@ def convert_excel_to_mspdi(
         # ====================================================================================
         # Generate XML
         project = Element("Project", xmlns="http://schemas.microsoft.com/project")
-        
-        # GPT 5.2 PRO: Workfront-required header fields BEFORE <Name>
-        # These prevent Workfront from rejecting files with "can't read file" errors
-        SubElement(project, "SaveVersion").text = "14"
-        SubElement(project, "Title").text = (project_name or project_title or "Project")
-        SubElement(project, "Author").text = "Agency Project Builder"
         
         # Project info - use explicit project_name if provided, otherwise fall back to derived title
         SubElement(project, "Name").text = (project_name or project_title)
