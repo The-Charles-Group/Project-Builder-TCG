@@ -1,0 +1,170 @@
+xact instructions for your Replit agent/architect
+Step A — Fix WBS row generation for nested tasks (stop using dur=1/base_offset=dstart)
+
+In build_wbs_with_pricing, remove the nested-path “stub scheduling”:
+
+Current bad behavior (nested path): 
+
+12.12.25 app gantt timeline sho…
+
+
+You want nested tasks to use the SAME offset_by_tg / duration_by_tg approach that the legacy path uses (it’s already doing that for the non-nested branch): 
+
+12.12.25 app gantt timeline sho…
+
+Change:
+
+For every task group row (client_review, general, etc.), set:
+
+Duration_Days = duration_by_tg.get(tg, 1)
+
+Start_Offset_Days = dstart + offset_by_tg.get(tg, 0) + month math…
+
+Do NOT default everything to 1 day at dstart.
+
+This alone will stop children from collapsing into the deliverable start.
+
+Step B — Fix the schedule builder: stop using PlannedHours to drive Finish
+
+This block is the mismatch factory: 
+
+12.12.25 app gantt timeline sho…
+
+Replace it with day-based scheduling (Mon–Fri), using Duration_Days as authoritative.
+
+Implementation pattern:
+
+Use business-day add for offsets (NOT timedelta(days=...))
+
+Compute finish = start + (duration_days - 1 business days)
+
+Set times consistently with an 8-hour workday (recommend 09:00–17:00)
+
+Pseudo-code:
+
+WORKDAY_START = datetime.time(9, 0)
+WORKDAY_END   = datetime.time(17, 0)
+MINUTES_PER_DAY = 480
+
+def add_business_days(d: date, n: int) -> date:
+    # n can be 0
+    step = 1 if n >= 0 else -1
+    cur = d
+    remaining = abs(n)
+    while remaining > 0:
+        cur += datetime.timedelta(days=step)
+        if cur.weekday() < 5:  # Mon-Fri
+            remaining -= 1
+    return cur
+
+def schedule_row(project_start_date: date, start_offset_days: int, duration_days: int):
+    duration_days = max(1, int(duration_days or 1))
+    start_date = add_business_days(project_start_date, int(start_offset_days or 0))
+    finish_date = add_business_days(start_date, duration_days - 1)
+    return (
+        datetime.datetime.combine(start_date, WORKDAY_START),
+        datetime.datetime.combine(finish_date, WORKDAY_END),
+        duration_days
+    )
+
+
+Critical: don’t compute finish from PlannedHours. Planned hours should populate <Work> only — not drive the timeline.
+
+Step C — After applying compressed L2 deliverable dates, recompute all children schedules off deliverable windows
+
+You already apply compressed dates to L2 only. 
+
+12.12.25 app gantt timeline sho…
+
+
+But you must then propagate those shifts so children start/finish land inside the deliverable span.
+
+Best approach (simple + deterministic):
+
+For each deliverable:
+
+Get deliverable start date (from compressed timeline)
+
+Schedule each child row using:
+
+child_start = add_business_days(deliv_start, child_relative_offset)
+
+child_finish = add_business_days(child_start, child_duration_days - 1)
+
+This avoids “stretching” math and makes debugging way easier.
+
+Step D — Step 4 Gantt must render from uid_to_sched for ALL rows
+
+Right now Step 4 is visually “deliverable-first”. You need the API that Step 4 uses to return:
+
+a flat list of rows (all WBS rows)
+
+each with:
+
+uid
+
+parent_uid
+
+name
+
+level
+
+start
+
+finish
+
+planned_hours
+
+duration_business_days
+
+Then the frontend Gantt can show:
+
+Deliverable view (collapsed) = roll-up summary bars
+
+Task-level view (expanded) = what you’re asking for
+
+Step E — Export XML must use the exact same schedule
+
+Your export logic for leaf tasks is already conceptually right: duration should equal the business-day span between Start/Finish (not hours-based). 
+
+12.12.25 app gantt timeline sho…
+
+So once Step B/C are correct (uid_to_sched has correct start/finish), XML will line up.
+
+Also: keep Duration in minutes as duration_days * 480 (you already do this in a few places). 
+
+12.12.25 app gantt timeline sho…
+
+Why “the app Gantt will match Workfront” after this change
+
+Because Workfront is effectively importing Duration and computing Finish from it; so as long as:
+
+Step 4 computes task-level start/finish using business days
+
+XML exports Start and Duration (PT{days*480}M) consistently
+
+…then Workfront and Step 4 become the same schedule.
+
+Right now, the reason they diverge is: deliverables get special treatment, children don’t, and children are still “hours-driven” in the schedule builder. 
+
+12.12.25 app gantt timeline sho…
+
+One last note about the Workfront Gantt “not looking like a waterfall”
+
+That usually comes from one of these:
+
+missing predecessor links between siblings (so everything starts ASAP)
+
+predecessor links pointing to the wrong UID/WBS
+
+constraints inherited / conflicting
+
+Once tasks have real offsets + durations, and you ensure:
+
+component-to-component dependencies (you already do sequential components in WBS builder) 
+
+12.12.25 app gantt timeline sho…
+
+task-group dependencies inside components (client_review → general → internal_review → qa)
+
+…the Gantt will naturally look “waterfally”.
